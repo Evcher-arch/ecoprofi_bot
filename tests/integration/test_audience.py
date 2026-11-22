@@ -31,29 +31,23 @@ def test_club_mark_and_paid_feed_close_the_material(docs):
     assert audience(docs, corpus.SCAN)["audience"] == "public"
 
 
-def test_roles_without_club_rights_get_nothing_closed(docs):
+def test_users_without_subscription_get_nothing_closed(docs):
     assert corpus.LETTER in docs.doc_ids(docs.ask("club", LETTER_QUESTION))
     for role in ("public", "unknown"):
         docs.ai.explain_calls.clear()
-        answer = docs.ask(role, LETTER_QUESTION)
-        assert not {corpus.LETTER, corpus.LETTER_SCAN} & set(docs.doc_ids(answer)), role
-        assert make.LETTER_NUMBER not in answer["text"] and "wall-100001_9102" not in answer["text"], role
-        assert "нормируются" not in answer["text"], role
-        sent = " ".join(c["excerpt"] + c["title"] for call in docs.ai.explain_calls for c in call["candidates"])
-        assert "нормируются" not in sent and "Письмо" not in sent, role      # модель закрытого не получила
+        for question in (LETTER_QUESTION, make.LETTER_NUMBER):
+            response = docs.post(docs.users[role], question)
+            docs.refused(response)
+            assert make.LETTER_NUMBER not in response.text and "нормируются" not in response.text, role
+        assert docs.ai.explain_calls == [], role                              # модель ничего не получила
 
 
-def test_number_question_does_not_reveal_closed_letter(docs):
-    answer = docs.ask("public", make.LETTER_NUMBER)
-    assert docs.doc_ids(answer) == [] and make.LETTER_NUMBER not in answer["text"]
-
-
-def test_revoked_club_rights_close_documents_without_restart(docs):
+def test_cancelled_subscription_closes_documents_without_restart(docs):
     assert corpus.LETTER in docs.doc_ids(docs.ask("club", LETTER_QUESTION))
-    testers = {str(p["vk_id"]): p["role"] for p in docs.corpus["participants"] if p["tester"]}
-    testers[str(docs.users["club"])] = "public"
-    apply_policy(docs.owner, parse_policy(docs.policy(testers=testers, materials={})))
-    assert corpus.LETTER not in docs.doc_ids(docs.ask("club", LETTER_QUESTION))
+    docs.subscribe("club", False)
+    response = docs.post(docs.users["club"], LETTER_QUESTION)
+    docs.refused(response)
+    assert "нормируются" not in response.text
 
 
 def test_paid_post_without_mark_is_club_even_for_shared_document(docs):
@@ -65,14 +59,13 @@ def test_paid_post_without_mark_is_club_even_for_shared_document(docs):
     assert audience(docs, corpus.TEXT)["audience"] == "club"
     # Документ приложен и к открытой публикации 9101, и к платной 9103 — действует более строгая.
     assert audience(docs, corpus.SCAN)["audience"] == "club"
-    assert corpus.SCAN not in docs.doc_ids(docs.ask("public", "плата за размещение отходов"))
 
 
 def test_editor_decision_made_with_current_signal_is_in_force(docs):
     decide(docs, {KEY(corpus.LETTER): "public"})
     row = audience(docs, corpus.LETTER)
     assert (row["signal"], row["decision"], row["seen_signal"], row["audience"]) == ("club", "public", "club", "public")
-    assert corpus.LETTER in docs.doc_ids(docs.ask("public", LETTER_QUESTION))
+    assert corpus.LETTER in docs.doc_ids(docs.ask("club", LETTER_QUESTION))
     assert "Расхождения аудитории\n\n" in report(docs) and KEY(corpus.LETTER) not in report(docs).split(
         "## Расхождения аудитории")[1].split("##")[0]
 
@@ -84,7 +77,6 @@ def test_decision_made_before_schedule_gives_the_stricter_audience(docs):
         (corpus.DOC_OWNER, corpus.LETTER))
     row = audience(docs, corpus.LETTER)
     assert (row["seen_signal"], row["audience"]) == (None, "club")
-    assert corpus.LETTER not in docs.doc_ids(docs.ask("public", LETTER_QUESTION))
     conflicts = report(docs).split("## Расхождения аудитории")[1].split("##")[0]
     assert KEY(corpus.LETTER) in conflicts and "клуб" in conflicts and "для всех" in conflicts
 

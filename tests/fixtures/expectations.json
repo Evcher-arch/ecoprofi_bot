@@ -1,5 +1,5 @@
 {
-  "comment": "Контрольные исходы для корпуса corpus.json. Ключи материалов — поле key.",
+  "comment": "Контрольные исходы для корпуса corpus.json. Ключи материалов — поле key. Роль club — подписчик клуба; public и unknown — пользователи без подписки, им приходит ответ про клуб.",
   "subtitles": {
     "razbor_club.vtt": {
       "control_episode": {
@@ -20,8 +20,8 @@
       "kind": "strong",
       "by_role": {
         "club": {"outcome": "found", "materials_include": ["razbor_club"], "max_cards": 3, "distinct_materials": true},
-        "public": {"outcome": "found", "materials_exclude": ["razbor_club"], "materials_include": ["lecture_public", "same_title_public"]},
-        "unknown": {"outcome": "found", "materials_exclude": ["razbor_club"]}
+        "public": {"outcome": "not_subscribed", "cards": 0},
+        "unknown": {"outcome": "not_subscribed", "cards": 0}
       }
     },
     {
@@ -29,21 +29,21 @@
       "kind": "closed-only",
       "by_role": {
         "club": {"outcome": "found", "materials_include": ["razbor_club"]},
-        "public": {"outcome_in": ["clarify", "empty"], "materials_exclude": ["razbor_club"]}
+        "public": {"outcome": "not_subscribed", "cards": 0}
       }
     },
     {
       "text": "перечень",
       "kind": "ambiguous",
       "by_role": {
-        "public": {"outcome": "clarify", "cards": 0}
+        "club": {"outcome": "clarify", "cards": 0}
       }
     },
     {
       "text": "паспортизация отходов",
       "kind": "card-only",
       "by_role": {
-        "public": {"outcome": "found", "card_types": ["navigation"], "materials_include": ["card_only_public"], "excerpt": null}
+        "club": {"outcome": "found", "card_types": ["navigation"], "materials_include": ["card_only_public"], "excerpt": null}
       }
     },
     {
@@ -51,7 +51,7 @@
       "kind": "off-corpus",
       "by_role": {
         "club": {"outcome": "empty", "cards": 0},
-        "public": {"outcome": "empty", "cards": 0}
+        "public": {"outcome": "not_subscribed", "cards": 0}
       }
     }
   ]

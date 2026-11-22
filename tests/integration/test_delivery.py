@@ -1,6 +1,7 @@
 """История 2: повтор событий, изоляция диалогов и доставка через адаптер."""
 import httpx
 
+from ecoprofi.bot.api import NOT_SUBSCRIBED_TEXT
 from ecoprofi.vk_adapter.__main__ import BotClient, to_event
 from ecoprofi.vk_adapter.delivery import SendUncertain, deliver
 from tests.integration.conftest import SERVICE_KEY
@@ -42,45 +43,57 @@ def test_duplicate_event_is_registered_once(loaded):
 
 
 def test_event_id_of_another_dialog_is_rejected(loaded):
+    loaded.subscribe("public")
     loaded.ask("club", CONTROL, event_id="shared")
     assert loaded.post(loaded.users["public"], CONTROL, event_id="shared").status_code == 403
 
 
 def test_two_dialogs_get_only_their_own_answers(loaded):
+    loaded.subscribe("public")                       # второй подписчик клуба
     vk, bot = RecordingVk(), bot_client(loaded)
     assert deliver(vk, bot, update(loaded, "club", CONTROL, "a1"), sleep=lambda s: None) == "sent"
-    assert deliver(vk, bot, update(loaded, "public", CONTROL, "b1"), sleep=lambda s: None) == "sent"
+    assert deliver(vk, bot, update(loaded, "public", "допустимую концентрацию", "b1"), sleep=lambda s: None) == "sent"
     by_peer = {peer: text for peer, _, text in vk.sent}
-    assert set(by_peer) == {loaded.users["club"], loaded.users["public"]}
+    assert set(by_peer) == {loaded.users["club"], loaded.users["public"]} and len(vk.sent) == 2
     assert "video-100001_111" in by_peer[loaded.users["club"]]
-    assert "video-100001_111" not in by_peer[loaded.users["public"]]
-    assert "взвешенные вещества" not in by_peer[loaded.users["public"]]
+    assert "Эпизод 12:00" in by_peer[loaded.users["public"]]
+    assert by_peer[loaded.users["club"]] != by_peer[loaded.users["public"]]
     states = loaded.owner.execute("SELECT state FROM event ORDER BY event_id").fetchall()
     assert [s["state"] for s in states] == ["delivered", "delivered"]
 
 
 def test_uncertain_send_resends_current_answer_with_same_random_id(loaded):
-    """Между неудачной отправкой и повтором клубные права отозваны."""
+    """Между неудачной отправкой и повтором подписка отменена: с тем же random_id уходит отказ про клуб."""
     class RevokingVk(RecordingVk):
         def send(self, peer_id, random_id, text):
             if self.errors:
                 self.first_attempt = (random_id, text)
-                loaded.set_role("club", "public")
+                loaded.subscribe("club", False)
             super().send(peer_id, random_id, text)
 
     vk = RevokingVk(errors=[SendUncertain()])
     assert deliver(vk, bot_client(loaded), update(loaded, "club", CONTROL, "u1"), sleep=lambda s: None) == "sent"
     assert "video-100001_111" in vk.first_attempt[1]
     (peer, random_id, text), = vk.sent
-    assert peer == loaded.users["club"]
-    assert random_id == vk.first_attempt[0]
-    assert "video-100001_111" not in text and "взвешенные вещества" not in text
+    assert peer == loaded.users["club"] and random_id == vk.first_attempt[0]
+    assert text.startswith(NOT_SUBSCRIBED_TEXT) and "video-100001_111" not in text
     assert loaded.owner.execute("SELECT count(*) AS n FROM event").fetchone()["n"] == 1
 
 
-def test_not_admitted_sender_gets_no_message(loaded):
+def test_sender_without_subscription_gets_club_message(loaded):
     vk = RecordingVk()
-    event = {"event_id": "x1", "group_id": loaded.group_id, "peer_id": loaded.outsider,
+    users = (loaded.outsider, loaded.users["public"])          # оба без подписки на клуб
+    for user in users:
+        event = {"event_id": f"x{user}", "group_id": loaded.group_id, "peer_id": user,
+                 "user_id": user, "text": CONTROL}
+        assert deliver(vk, bot_client(loaded), event, sleep=lambda s: None) == "sent"
+    assert [peer for peer, _, _ in vk.sent] == list(users)
+    assert all(text.startswith(NOT_SUBSCRIBED_TEXT) and "video-" not in text for _, _, text in vk.sent)
+
+
+def test_foreign_chat_still_gets_no_message(loaded):
+    vk = RecordingVk()
+    event = {"event_id": "chat", "group_id": loaded.group_id, "peer_id": 2000000001,
              "user_id": loaded.outsider, "text": CONTROL}
     assert deliver(vk, bot_client(loaded), event, sleep=lambda s: None) == "skipped"
     assert vk.sent == []

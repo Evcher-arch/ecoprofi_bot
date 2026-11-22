@@ -1,10 +1,12 @@
 """Проверка доверенного канала и текущих прав участника.
 
-Права читаются из БД при каждом обращении. Права оператора индексатора
-сюда не входят и доступа участнику не дают.
+Допуск — только подписка на клуб Экопрофи (VK Donut), она проверяется при
+каждом обращении (ecoprofi.bot.club). Отдельного списка участников в БД нет.
+Права оператора индексатора сюда не входят и доступа участнику не дают.
 """
 import hmac
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 
 
@@ -16,12 +18,19 @@ class Forbidden(Exception):
     """Недопустимые группа, диалог или участник (403)."""
 
 
+class NotSubscribed(Forbidden):
+    """Личный диалог допустим, но у автора нет подписки на клуб: ему отвечают отказом про клуб."""
+
+
 @dataclass(frozen=True)
 class Access:
     group_id: int
     user_id: int
-    role: str                    # public / club / unknown
+    role: str                    # club: подписчик клуба
     audiences: tuple[str, ...]   # аудитории материалов, доступные участнику
+
+
+CLUB_AUDIENCES = ("public", "club")
 
 
 def check_service_key(presented: str | None, expected: str | None = None) -> None:
@@ -30,23 +39,19 @@ def check_service_key(presented: str | None, expected: str | None = None) -> Non
         raise Unauthorized()
 
 
-def audiences_for(role: str) -> tuple[str, ...]:
-    """Неизвестная роль допущенного участника разрешает публичную часть."""
-    return ("public", "club") if role == "club" else ("public",)
+def resolve_access(conn, group_id: int, peer_id: int, user_id: int, is_member: Callable[[int], bool]) -> Access:
+    """Проверить группу, личный диалог и подписку на клуб; вернуть действующую роль.
 
-
-def resolve_access(conn, group_id: int, peer_id: int, user_id: int) -> Access:
-    """Проверить группу, личный диалог и допуск; вернуть действующую роль."""
+    is_member — проверка подписки (ClubMembers); её сбой (ClubUnavailable) пробрасывается:
+    без подтверждённой подписки доступ не выдаётся.
+    """
     if user_id <= 0 or peer_id != user_id:
         raise Forbidden("Поиск доступен только в личном диалоге.")
-    row = conn.execute(
-        "SELECT p.role FROM participant p JOIN test_group g USING (group_id) "
-        "WHERE p.group_id = %s AND p.vk_id = %s AND p.tester",
-        (group_id, user_id),
-    ).fetchone()
-    if row is None:
-        raise Forbidden("Группа или участник не допущены к тесту.")
-    return Access(group_id, user_id, row["role"], audiences_for(row["role"]))
+    if conn.execute("SELECT 1 FROM test_group WHERE group_id = %s", (group_id,)).fetchone() is None:
+        raise Forbidden("Сообщество не подключено к поиску.")
+    if not is_member(user_id):
+        raise NotSubscribed("Поиск доступен подписчикам клуба Экопрофи.")
+    return Access(group_id, user_id, "club", CLUB_AUDIENCES)
 
 
 # Сигнал расписания для материала m: club, если хотя бы одна его публикация

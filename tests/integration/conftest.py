@@ -102,6 +102,21 @@ class FakeVkTransport:
         return self.tracks.get(name) or (FIXTURES / name).read_bytes()
 
 
+class FakeClub:
+    """Подмена проверки подписки на клуб: набор подписчиков меняется сценарием."""
+
+    def __init__(self, members):
+        self.members = set(members)
+        self.calls = 0
+        self.failure: Exception | None = None
+
+    def __call__(self, user_id: int) -> bool:
+        self.calls += 1
+        if self.failure is not None:
+            raise self.failure
+        return user_id in self.members
+
+
 class Stand:
     """Всё, что нужно сценарию: соединения, подмены, загрузка и запросы."""
 
@@ -117,32 +132,26 @@ class Stand:
         self.materials = {m["key"]: m for l in self.corpus["lectures"] for m in l["materials"]}
         self.schedule = {m["post_id"]: (l["schedule_row"], l["title"])
                          for l in self.corpus["lectures"] for m in l["materials"]}
+        # Подписчик клуба — «club»; «public» и «unknown» — пользователи без подписки.
         self.users = {p["role"]: p["vk_id"] for p in self.corpus["participants"] if p["tester"]}
         self.outsider = next(p["vk_id"] for p in self.corpus["participants"] if not p["tester"])
+        self.club = FakeClub({self.users["club"]})
         self.client = TestClient(create_app(
-            connect_fn=lambda: connect(bot_dsn), ai=self.ai, service_key=SERVICE_KEY))
+            connect_fn=lambda: connect(bot_dsn), ai=self.ai, service_key=SERVICE_KEY, club=self.club))
         self._events = itertools.count(1)
 
     # --- политика ---
-    def policy(self, *, testers=None, materials=None) -> dict:
-        testers = testers if testers is not None else {
-            str(p["vk_id"]): p["role"] for p in self.corpus["participants"] if p["tester"]}
+    def policy(self, *, materials=None) -> dict:
         materials = materials if materials is not None else {
             f"{m['owner_id']}_{m['video_id']}": m["audience"] for m in self.materials.values()}
-        return {"group_id": self.group_id, "testers": testers, "materials": materials}
+        return {"group_id": self.group_id, "materials": materials}
 
     def import_policy(self, **changes) -> None:
         apply_policy(self.owner, parse_policy(self.policy(**changes)))
 
-    def set_role(self, role_key: str, new_role: str | None) -> None:
-        """Сменить роль участника повторным импортом; None — убрать из политики."""
-        testers = {str(p["vk_id"]): p["role"] for p in self.corpus["participants"] if p["tester"]}
-        vk_id = str(self.users[role_key])
-        if new_role is None:
-            testers.pop(vk_id)
-        else:
-            testers[vk_id] = new_role
-        self.import_policy(testers=testers)
+    def subscribe(self, role_key: str, subscribed: bool = True) -> None:
+        """Оформить или отменить подписку на клуб без перезапуска."""
+        (self.club.members.add if subscribed else self.club.members.discard)(self.users[role_key])
 
     # --- индексатор ---
     def index(self, post_ids=None, *, sleep=lambda s: None) -> list[dict]:
@@ -176,6 +185,15 @@ class Stand:
         response = self.post(self.users[role_key], text, **kwargs)
         assert response.status_code == 200, response.text
         return response.json()
+
+    def refused(self, response) -> dict:
+        """Ответ неподписчику: только текст про клуб, без карточек и найденного."""
+        from ecoprofi.bot.api import NOT_SUBSCRIBED_TEXT
+        assert response.status_code == 200, response.text
+        answer = response.json()
+        assert (answer["outcome"], answer["cards"]) == ("not_subscribed", []), answer
+        assert answer["text"].startswith(NOT_SUBSCRIBED_TEXT)
+        return answer
 
     def keys(self, answer: dict) -> list[str]:
         return [self.key_of(c["material_id"]) for c in answer["cards"]]

@@ -10,12 +10,20 @@ def pending(stand, role):
     return row and row["pending_query"]
 
 
+@pytest.fixture
+def subscribers(loaded):
+    """Все три тестовые учётные записи подписаны на клуб: отдельные диалоги для проверки изоляции."""
+    for role in ("public", "unknown"):
+        loaded.subscribe(role)
+    return loaded
+
+
 def test_expected_outcomes_from_fixture_table(loaded):
     """Сильный, неоднозначный, посторонний запросы и запись без дорожки — по expectations.json."""
     for query in loaded.expectations["queries"]:
         for role, expected in query["by_role"].items():
-            answer = loaded.ask(role, query["text"])
             label = f"{query['text']} / {role}"
+            answer = loaded.ask(role, query["text"])
             if "outcome" in expected:
                 assert answer["outcome"] == expected["outcome"], label
             if "outcome_in" in expected:
@@ -40,7 +48,7 @@ def test_off_corpus_question_returns_no_quotes_or_timecodes(loaded):
 
 
 def test_card_without_track_is_navigation_only(loaded):
-    answer = loaded.ask("public", "паспортизация отходов")
+    answer = loaded.ask("club", "паспортизация отходов")
     (card,) = answer["cards"]
     assert set(card) == {"type", "material_id", "title", "lecture", "explanation", "url"}
     assert card["type"] == "navigation"
@@ -56,7 +64,8 @@ def test_navigation_card_counts_towards_limit_of_three(loaded):
     assert len(answer["cards"]) == 3
 
 
-def test_clarification_continues_own_dialog_and_finds_episode(loaded):
+def test_clarification_continues_own_dialog_and_finds_episode(subscribers):
+    loaded = subscribers
     first = loaded.ask("public", "перечень")
     assert first["outcome"] == "clarify" and first["cards"] == []
     assert pending(loaded, "public") == "перечень"
@@ -66,7 +75,8 @@ def test_clarification_continues_own_dialog_and_finds_episode(loaded):
     assert pending(loaded, "public") is None
 
 
-def test_two_simultaneous_clarifications_stay_isolated(loaded):
+def test_two_simultaneous_clarifications_stay_isolated(subscribers):
+    loaded = subscribers
     loaded.ask("public", "перечень")
     loaded.ask("unknown", "веществ")
     assert pending(loaded, "public") == "перечень"
@@ -78,7 +88,8 @@ def test_two_simultaneous_clarifications_stay_isolated(loaded):
     assert loaded.keys(answer)[0] == "same_title_public"
 
 
-def test_repeated_event_does_not_advance_clarification_twice(loaded):
+def test_repeated_event_does_not_advance_clarification_twice(subscribers):
+    loaded = subscribers
     loaded.ask("public", "перечень", event_id="c1")
     loaded.ask("public", "перечень", event_id="c1")
     assert pending(loaded, "public") == "перечень"
@@ -90,21 +101,21 @@ def test_repeated_event_does_not_advance_clarification_twice(loaded):
 
 
 def test_role_change_between_clarification_turns(loaded):
-    """Клубный участник начал уточнение, потерял права и не получает закрытый эпизод."""
+    """Подписчик начал уточнение, отменил подписку и не получает закрытый эпизод."""
     first = loaded.ask("club", "нормативы")
     assert first["outcome"] in ("found", "clarify")
     loaded.owner.execute("DELETE FROM dialog_context")
     loaded.owner.execute(
         "INSERT INTO dialog_context (group_id, peer_id, user_id, pending_query) VALUES (%s, %s, %s, 'взвешенные')",
         (loaded.group_id, loaded.users["club"], loaded.users["club"]))
-    loaded.set_role("club", "public")
-    answer = loaded.ask("club", "вещества")
-    assert "razbor_club" not in loaded.keys(answer)
-    assert "взвешенные вещества" not in answer["text"]
+    loaded.subscribe("club", False)
+    response = loaded.post(loaded.users["club"], "вещества")
+    loaded.refused(response)
+    assert "взвешенные вещества" not in response.text
 
 
 def test_question_of_stop_words_asks_to_clarify(loaded):
-    assert loaded.ask("public", "а что и как")["outcome"] == "clarify"
+    assert loaded.ask("club", "а что и как")["outcome"] == "clarify"
 
 
 def test_model_outage_keeps_answer_with_default_explanation(loaded):

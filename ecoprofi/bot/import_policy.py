@@ -1,8 +1,10 @@
 """Атомарный импорт разрешений пилота: python -m ecoprofi.bot.import_policy /input/policy.json
 
-Файл целиком заменяет действующую политику одной транзакцией: участник или
-материал, отсутствующий в новом файле, теряет доступ без перезапуска сервисов.
+Файл целиком заменяет действующую политику одной транзакцией: материал,
+отсутствующий в новом файле, закрывается без перезапуска сервисов.
 Формат — pilot-policy.json, версии 1 и 2 (contracts/operator-commands.md).
+Раздел testers больше не действует: участника допускает подписка на клуб
+Экопрофи (ecoprofi.bot.club). Старый файл с этим разделом импортируется, раздел пропускается.
 """
 import json
 import sys
@@ -24,7 +26,7 @@ def _unique_keys(pairs: list) -> dict:
     result = {}
     for key, value in pairs:
         if key in result:
-            raise PolicyError(f"Ключ «{key}» указан дважды: у участника одна роль, у материала одна аудитория.")
+            raise PolicyError(f"Ключ «{key}» указан дважды: у материала одна аудитория.")
         result[key] = value
     return result
 
@@ -51,17 +53,6 @@ def parse_policy(data: dict) -> dict:
     group_id = data.get("group_id")
     if not isinstance(group_id, int) or isinstance(group_id, bool) or group_id <= 0:
         raise PolicyError("group_id — положительное число (ID тестового сообщества).")
-
-    testers = {}
-    raw_testers = data.get("testers", {})
-    if not isinstance(raw_testers, dict):
-        raise PolicyError("testers — объект «VK ID: роль».")
-    for key, role in raw_testers.items():
-        if not str(key).isdigit() or int(key) <= 0:
-            raise PolicyError(f"testers: «{key}» не является положительным VK ID.")
-        if role not in ROLES:
-            raise PolicyError(f"testers[{key}]: роль должна быть public, club или unknown.")
-        testers[int(key)] = role
 
     materials = {}
     raw_materials = data.get("materials", {})
@@ -105,8 +96,8 @@ def parse_policy(data: dict) -> dict:
             "date": when, "number": str(value["number"]).strip(),
             "sender": (str(value["sender"]).strip() or None) if value.get("sender") else None,
         }
-    return {"group_id": group_id, "testers": testers, "materials": materials, "lectures": lectures,
-            "confirmed": confirmed, "requisites": requisites}
+    return {"group_id": group_id, "materials": materials, "lectures": lectures,
+            "confirmed": confirmed, "requisites": requisites, "ignored_testers": "testers" in data}
 
 
 def apply_policy(conn, policy: dict) -> dict:
@@ -117,13 +108,8 @@ def apply_policy(conn, policy: dict) -> dict:
         conn.execute("LOCK TABLE test_group, participant, material_policy IN EXCLUSIVE MODE")
         conn.execute("DELETE FROM test_group WHERE group_id <> %s", (group_id,))
         conn.execute("INSERT INTO test_group (group_id) VALUES (%s) ON CONFLICT DO NOTHING", (group_id,))
-        conn.execute("DELETE FROM participant WHERE group_id = %s", (group_id,))
-        for vk_id, role in policy["testers"].items():
-            # Допуск к тесту хранится отдельно от роли.
-            conn.execute(
-                "INSERT INTO participant (group_id, vk_id, tester, role) VALUES (%s, %s, true, %s)",
-                (group_id, vk_id, role),
-            )
+        # Прежний список участников не действует: допуск — подписка на клуб.
+        conn.execute("DELETE FROM participant")
 
         previous = {(r["item_type"], r["owner_id"], r["item_id"]): r for r in conn.execute(
             "SELECT item_type, owner_id, item_id, audience, seen_signal, decided_at FROM material_policy").fetchall()}
@@ -174,7 +160,7 @@ def apply_policy(conn, policy: dict) -> dict:
                     "UPDATE material SET req_date = %s, req_number = %s, req_sender = coalesce(%s, req_sender), "
                     "req_state = 'confirmed', doc_numbers = %s WHERE id = %s",
                     (req["date"], req["number"], req["sender"], doc_numbers(row["title"], req["number"]), row["id"]))
-    return {"group_id": group_id, "testers": len(policy["testers"]), "materials": len(policy["materials"]),
+    return {"group_id": group_id, "materials": len(policy["materials"]),
             "lectures": None if lectures is None else len(lectures),
             "requisites": len(policy.get("requisites", {}))}
 
@@ -191,9 +177,10 @@ def main(argv: list[str]) -> int:
         print(f"Политика не импортирована: {exc}", file=sys.stderr)
         return 1
     sample = "без изменений" if counts["lectures"] is None else str(counts["lectures"])
-    print(f"Политика импортирована: группа {counts['group_id']}, "
-          f"тестировщиков {counts['testers']}, материалов {counts['materials']}, "
+    print(f"Политика импортирована: группа {counts['group_id']}, материалов {counts['materials']}, "
           f"лекций в выборке {sample}, подтверждённых реквизитов {counts['requisites']}.")
+    if policy["ignored_testers"]:
+        print("Раздел testers пропущен: участников допускает подписка на клуб Экопрофи.")
     return 0
 
 

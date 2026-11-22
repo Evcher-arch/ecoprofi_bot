@@ -2,6 +2,7 @@
 перепривязка материалов 001, выборка пилота."""
 import pytest
 
+from ecoprofi.bot.access import MATERIAL_AUDIENCE
 from ecoprofi.bot.import_policy import PolicyError, apply_policy, parse_policy
 from ecoprofi.db import connect
 from ecoprofi.indexer.schedule import parse_schedule, sync_schedule
@@ -81,7 +82,9 @@ def test_materials_of_001_are_moved_to_the_real_row(loaded):
     assert [(r["schedule_row"], str(r["lecture_date"])) for r in row] == [("2024-04-05 разбор 2909-р", "2024-04-05")]
     # Решение редактора «клуб» принято до расписания и строже него: аудитория не меняется молча.
     assert "razbor_club" in loaded.keys(loaded.ask("club", "взвешенные вещества"))
-    assert "razbor_club" not in loaded.keys(loaded.ask("public", "взвешенные вещества"))
+    audience = loaded.owner.execute(f"SELECT a.audience FROM ({MATERIAL_AUDIENCE}) a WHERE a.id = %s",
+                                    (loaded.material_id("razbor_club"),)).fetchone()["audience"]
+    assert audience == "club"
     card = loaded.ask("club", "взвешенные вещества")["cards"][0]
     assert card["lecture"] == {"title": "Разбор 2909-р", "date": "2024-04-05"}
 
@@ -94,11 +97,11 @@ def test_pilot_sample_is_imported_and_unknown_key_changes_nothing(stand):
     rows = stand.owner.execute("SELECT schedule_row FROM pilot_lecture ORDER BY 1").fetchall()
     assert [r["schedule_row"] for r in rows] == [corpus.ROW_FEES, corpus.ROW_LIMITS]
 
-    bad = dict(policy, lectures=["2030-01-01 нет такой строки"], testers={})
+    bad = dict(policy, lectures=["2030-01-01 нет такой строки"], materials={"-100001_111": "club"})
     with pytest.raises(PolicyError):
         apply_policy(stand.owner, parse_policy(bad))
     assert stand.owner.execute("SELECT count(*) AS n FROM pilot_lecture").fetchone()["n"] == 2
-    assert stand.owner.execute("SELECT count(*) AS n FROM participant").fetchone()["n"] == 3   # откат целиком
+    assert stand.owner.execute("SELECT count(*) AS n FROM material_policy").fetchone()["n"] == 0  # откат целиком
 
 
 def test_policy_without_lectures_section_keeps_the_sample(stand):

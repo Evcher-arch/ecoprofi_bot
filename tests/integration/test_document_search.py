@@ -16,7 +16,7 @@ def card_of(stand, answer, doc_id):
 
 
 def test_scanned_page_is_found_with_page_number_and_lecture(docs):
-    answer = docs.ask("public", "плата за размещение отходов")
+    answer = docs.ask("club", "плата за размещение отходов")
     assert answer["outcome"] == "found"
     card = card_of(docs, answer, corpus.SCAN)
     assert set(card) == {"type", "material_id", "title", "lecture", "explanation", "url",
@@ -32,7 +32,7 @@ def test_scanned_page_is_found_with_page_number_and_lecture(docs):
 
 
 def test_excerpt_is_verbatim_text_of_that_page(docs):
-    card = card_of(docs, docs.ask("public", "плата за размещение отходов"), corpus.SCAN)
+    card = card_of(docs, docs.ask("club", "плата за размещение отходов"), corpus.SCAN)
     page = docs.owner.execute(
         "SELECT f.text FROM fragment f JOIN material m ON m.published_version_id = f.version_id "
         "WHERE m.id = %s AND f.page_no = %s", (card["material_id"], card["page"])).fetchone()["text"]
@@ -40,7 +40,7 @@ def test_excerpt_is_verbatim_text_of_that_page(docs):
 
 
 def test_text_layer_page_is_found_without_recognition_mark(docs):
-    answer = docs.ask("public", "нормативы допустимых выбросов стационарных источников")
+    answer = docs.ask("club", "нормативы допустимых выбросов стационарных источников")
     card = card_of(docs, answer, corpus.TEXT)
     assert (card["type"], card["page"], card["recognized"]) == ("page", 1, False)
     assert card["url"] == WALL + "9103"
@@ -48,7 +48,7 @@ def test_text_layer_page_is_found_without_recognition_mark(docs):
 
 
 def test_table_value_comes_with_its_heading(docs):
-    card = card_of(docs, docs.ask("public", "комплексное экологическое разрешение первая категория"), corpus.TEXT)
+    card = card_of(docs, docs.ask("club", "комплексное экологическое разрешение первая категория"), corpus.TEXT)
     assert card["page"] == 2
     assert "категория" in card["excerpt"].lower()
 
@@ -85,7 +85,7 @@ def test_question_with_document_number_only_finds_the_letter(docs):
 
 
 def test_number_in_title_gives_whole_material_card_without_place(docs):
-    answer = docs.ask("public", "таблица 7777-р")
+    answer = docs.ask("club", "таблица 7777-р")
     assert answer["outcome"] == "found"
     card = card_of(docs, answer, corpus.DOCX)
     assert set(card) == {"type", "material_id", "title", "lecture", "explanation", "url", "material_kind"}
@@ -94,13 +94,13 @@ def test_number_in_title_gives_whole_material_card_without_place(docs):
 
 
 def test_similar_number_is_a_different_document(docs):
-    answer = docs.ask("public", "7777")
+    answer = docs.ask("club", "7777")
     assert corpus.DOCX not in docs.doc_ids(answer)
 
 
 def test_model_gets_only_excerpts_and_cannot_add_candidates(docs):
     docs.ai.foreign_id = 999_999
-    answer = docs.ask("public", "плата за размещение отходов")
+    answer = docs.ask("club", "плата за размещение отходов")
     sent = docs.ai.explain_calls[-1]["candidates"]
     assert {c["id"] for c in sent} == {c["material_id"] for c in answer["cards"] if "excerpt" in c}
     assert all(c["material_id"] != 999_999 for c in answer["cards"])
@@ -114,6 +114,6 @@ def test_question_outside_corpus_has_no_pages_or_requisites(docs):
 
 def test_document_survives_reconnect_without_reindexing(docs):
     before = docs.counts()
-    answer = docs.ask("public", "плата за размещение отходов")
+    answer = docs.ask("club", "плата за размещение отходов")
     assert docs.doc_ids(answer)[0] == corpus.SCAN
     assert docs.counts() == before

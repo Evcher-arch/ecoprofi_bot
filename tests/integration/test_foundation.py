@@ -3,7 +3,7 @@ import psycopg
 import pytest
 
 from ecoprofi.bot.access import Forbidden, resolve_access
-from ecoprofi.bot.import_policy import PolicyError, load_policy, parse_policy
+from ecoprofi.bot.import_policy import PolicyError, apply_policy, load_policy, parse_policy
 from ecoprofi.bot.migrate import migrate
 from ecoprofi.db import connect
 
@@ -42,18 +42,26 @@ def test_component_roles_are_separated(loaded):
 
 
 def test_policy_import_is_atomic_and_replaces_previous(loaded):
-    loaded.import_policy(testers={str(loaded.users["public"]): "public"})
-    with pytest.raises(Forbidden):
-        resolve_access(loaded.owner, loaded.group_id, loaded.users["club"], loaded.users["club"])
-    assert resolve_access(loaded.owner, loaded.group_id, loaded.users["public"], loaded.users["public"]).role == "public"
+    club = loaded.users["club"]
+    loaded.import_policy(materials={})
+    assert loaded.owner.execute("SELECT count(*) AS n FROM material_policy").fetchone()["n"] == 0
+    assert resolve_access(loaded.owner, loaded.group_id, club, club, loaded.club).role == "club"
+    apply_policy(loaded.owner, parse_policy(dict(loaded.policy(), group_id=loaded.group_id + 1)))
+    with pytest.raises(Forbidden):                     # прежнее сообщество отключено
+        resolve_access(loaded.owner, loaded.group_id, club, club, loaded.club)
+
+
+def test_old_policy_with_testers_section_is_imported_without_them(loaded):
+    policy = parse_policy(dict(loaded.policy(), testers={"abc": "admin"}))
+    assert policy["ignored_testers"] and "testers" not in policy
+    apply_policy(loaded.owner, policy)
+    assert loaded.owner.execute("SELECT count(*) AS n FROM participant").fetchone()["n"] == 0
 
 
 @pytest.mark.parametrize("broken", [
-    {"group_id": 0, "testers": {}, "materials": {}},
-    {"group_id": 1, "testers": {"abc": "club"}, "materials": {}},
-    {"group_id": 1, "testers": {"5": "admin"}, "materials": {}},
-    {"group_id": 1, "testers": {}, "materials": {"111": "club"}},
-    {"group_id": 1, "testers": {}, "materials": {"-1_2": "secret"}},
+    {"group_id": 0, "materials": {}},
+    {"group_id": 1, "materials": {"111": "club"}},
+    {"group_id": 1, "materials": {"-1_2": "secret"}},
 ])
 def test_broken_policy_is_rejected_before_any_change(broken):
     with pytest.raises(PolicyError):
@@ -61,8 +69,8 @@ def test_broken_policy_is_rejected_before_any_change(broken):
 
 
 @pytest.mark.parametrize("text", [
-    '{"group_id": 1, "testers": {"5": "club", "5": "public"}, "materials": {}}',
-    '{"group_id": 1, "testers": {}, "materials": {"-1_2": "club", "-1_2": "public"}}',
+    '{"group_id": 1, "group_id": 2, "materials": {}}',
+    '{"group_id": 1, "materials": {"-1_2": "club", "-1_2": "public"}}',
 ])
 def test_duplicate_policy_key_is_rejected(text):
     with pytest.raises(PolicyError):
@@ -71,14 +79,13 @@ def test_duplicate_policy_key_is_rejected(text):
 
 def test_access_rules(loaded):
     club = loaded.users["club"]
-    assert resolve_access(loaded.owner, loaded.group_id, club, club).audiences == ("public", "club")
-    unknown = loaded.users["unknown"]
-    assert resolve_access(loaded.owner, loaded.group_id, unknown, unknown).audiences == ("public",)
+    assert resolve_access(loaded.owner, loaded.group_id, club, club, loaded.club).audiences == ("public", "club")
     for group, peer, user in (
         (loaded.group_id + 1, club, club),          # чужая группа
         (loaded.group_id, 2000000001, club),        # беседа
-        (loaded.group_id, loaded.outsider, loaded.outsider),  # без допуска
+        (loaded.group_id, loaded.outsider, loaded.outsider),               # без подписки
+        (loaded.group_id, loaded.users["public"], loaded.users["public"]),  # без подписки
         (loaded.group_id, -5, -5),                  # не пользователь
     ):
         with pytest.raises(Forbidden):
-            resolve_access(loaded.owner, group, peer, user)
+            resolve_access(loaded.owner, group, peer, user, loaded.club)

@@ -50,6 +50,12 @@ services:
       YANDEX_API_KEY: ${YANDEX_API_KEY:-}
       YANDEX_QUERY_EMBEDDING_MODEL: ${YANDEX_QUERY_EMBEDDING_MODEL:-}
       YANDEX_COMPLETION_MODEL: ${YANDEX_COMPLETION_MODEL:-}
+      # Допуск к поиску — подписка на клуб Экопрофи (VK Donut); ключ сообщества Экопрофи.
+      CLUB_GROUP_TOKEN: ${CLUB_GROUP_TOKEN:-}
+      CLUB_GROUP_ID: ${CLUB_GROUP_ID:-95098598}
+      CLUB_CACHE_SECONDS: ${CLUB_CACHE_SECONDS:-60}
+      # Ссылка на оформление подписки в ответе неподписчику; без значения — только текст.
+      CLUB_URL: ${CLUB_URL:-}
     depends_on:
       db:
         condition: service_healthy

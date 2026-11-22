@@ -42,11 +42,11 @@ def test_quote_interval_and_link_belong_to_one_version(loaded):
 
 
 def test_link_start_rounds_down_and_displayed_end_rounds_up(loaded):
-    answer = loaded.ask("public", "допустимую концентрацию")
+    answer = loaded.ask("club", "допустимую концентрацию")
     card = answer["cards"][loaded.keys(answer).index("lecture_public")]
     assert (card["start_ms"], card["end_ms"]) == (720_000, 739_000)
     loaded.owner.execute("UPDATE fragment SET start_ms = 720900, end_ms = 738100 WHERE start_ms = 720000")
-    answer = loaded.ask("public", "допустимую концентрацию")
+    answer = loaded.ask("club", "допустимую концентрацию")
     card = answer["cards"][loaded.keys(answer).index("lecture_public")]
     assert card["url"].endswith("?t=720s")
     assert "Эпизод 12:00–12:19" in answer["text"]
@@ -74,20 +74,20 @@ def test_model_explanation_for_foreign_candidate_is_ignored(loaded):
 
 
 def test_access_is_checked_before_model_is_needed(loaded, monkeypatch):
-    """Без настроек AI Studio посторонний получает 403, допущенный — временную ошибку 503."""
+    """Без настроек AI Studio пользователь без подписки получает ответ про клуб, подписчик — временную ошибку 503."""
     from fastapi.testclient import TestClient
 
     from ecoprofi.bot.api import create_app
     from ecoprofi.db import connect
     for name in ("YANDEX_FOLDER_ID", "YANDEX_API_KEY"):
         monkeypatch.delenv(name, raising=False)
-    client = TestClient(create_app(connect_fn=lambda: connect(loaded.bot_dsn), service_key="k"))
+    client = TestClient(create_app(connect_fn=lambda: connect(loaded.bot_dsn), service_key="k", club=loaded.club))
 
     def post(user):
         return client.post("/api/search", headers={"X-Service-Key": "k"}, json={
             "event_id": "p", "group_id": loaded.group_id, "peer_id": user, "user_id": user, "text": CONTROL})
 
-    assert post(loaded.outsider).status_code == 403
+    loaded.refused(post(loaded.outsider))
     assert post(loaded.users["club"]).status_code == 503
 
 
@@ -96,7 +96,7 @@ def test_status_codes(loaded):
     assert loaded.post(club, CONTROL, key="wrong").status_code == 401
     assert loaded.post(club, CONTROL, key=None).status_code == 401
     assert loaded.post(club, "   ", key="wrong").status_code == 401     # ключ проверяется раньше тела
-    assert loaded.post(loaded.outsider, CONTROL).status_code == 403
+    loaded.refused(loaded.post(loaded.outsider, CONTROL))
     assert loaded.post(club, CONTROL, group_id=loaded.group_id + 1).status_code == 403
     assert loaded.post(club, CONTROL, peer_id=2000000001).status_code == 403
     assert loaded.post(club, "   ").status_code == 422
