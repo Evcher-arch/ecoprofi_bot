@@ -417,6 +417,14 @@ def main():
     if not token.get("access_token"):
         raise ValueError("VK ID token exchange failed: " + str(token.get("error", "missing access token")))
     print("VK ID: OK")
+    if sys.argv[1:] == ["--copy-token"]:
+        # Передача токена индексатору: в буфер обмена, без вывода на экран и в журнал.
+        subprocess.run(["clip.exe"], input=token["access_token"].encode("ascii"), check=True)
+        print("Токен скопирован в буфер обмена. Вставьте его в скрытое приглашение индексатора.")
+        input("После вставки нажмите Enter — буфер обмена будет очищен: ")
+        subprocess.run(["clip.exe"], input=b"", check=True)
+        print("Буфер обмена очищен.")
+        return
     if sys.argv[1:] == ["--search-content"]:
         corpus = {}
         scan_donut(token["access_token"], inspect_videos=True, corpus=corpus)

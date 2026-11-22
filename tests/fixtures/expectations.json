@@ -1,0 +1,58 @@
+{
+  "comment": "Контрольные исходы для корпуса corpus.json. Ключи материалов — поле key.",
+  "subtitles": {
+    "razbor_club.vtt": {
+      "control_episode": {
+        "start_ms": 1563000,
+        "end_ms": 1590000,
+        "text": "в перечень загрязняющих веществ включены взвешенные вещества и для них установлены нормативы поэтому при сбросе их нужно учитывать отдельной строкой это важно для расчёта платы это важно для расчёта платы",
+        "url_suffix": "?t=1563s",
+        "note": "Перекрытие 26:08.9–26:09.5 устранено; повтор после паузы 23.0–25.5 с сохранён."
+      },
+      "episode_count": 3
+    },
+    "lecture_public.vtt": {"episode_count": 3},
+    "same_title_public.vtt": {"episode_count": 2}
+  },
+  "queries": [
+    {
+      "text": "загрязняющих веществ",
+      "kind": "strong",
+      "by_role": {
+        "club": {"outcome": "found", "materials_include": ["razbor_club"], "max_cards": 3, "distinct_materials": true},
+        "public": {"outcome": "found", "materials_exclude": ["razbor_club"], "materials_include": ["lecture_public", "same_title_public"]},
+        "unknown": {"outcome": "found", "materials_exclude": ["razbor_club"]}
+      }
+    },
+    {
+      "text": "взвешенные вещества",
+      "kind": "closed-only",
+      "by_role": {
+        "club": {"outcome": "found", "materials_include": ["razbor_club"]},
+        "public": {"outcome_in": ["clarify", "empty"], "materials_exclude": ["razbor_club"]}
+      }
+    },
+    {
+      "text": "перечень",
+      "kind": "ambiguous",
+      "by_role": {
+        "public": {"outcome": "clarify", "cards": 0}
+      }
+    },
+    {
+      "text": "паспортизация отходов",
+      "kind": "card-only",
+      "by_role": {
+        "public": {"outcome": "found", "card_types": ["navigation"], "materials_include": ["card_only_public"], "excerpt": null}
+      }
+    },
+    {
+      "text": "рецепт борща со сметаной",
+      "kind": "off-corpus",
+      "by_role": {
+        "club": {"outcome": "empty", "cards": 0},
+        "public": {"outcome": "empty", "cards": 0}
+      }
+    }
+  ]
+}

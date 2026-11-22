@@ -1,0 +1,68 @@
+{
+  "comment": "Синтетический корпус. Идентификаторы вымышлены и не совпадают с реальными объектами VK.",
+  "group_id": 900001,
+  "participants": [
+    {"vk_id": 5001, "tester": true, "role": "club"},
+    {"vk_id": 5002, "tester": true, "role": "public"},
+    {"vk_id": 5003, "tester": true, "role": "unknown"},
+    {"vk_id": 5004, "tester": false, "role": "club"}
+  ],
+  "lectures": [
+    {
+      "schedule_row": "fixture-row-1",
+      "title": "Сбросы: перечень 2909-р",
+      "materials": [
+        {
+          "key": "razbor_club",
+          "post_id": 9001,
+          "owner_id": -100001,
+          "video_id": 111,
+          "link_type": "attachment",
+          "title": "Разбор перечня загрязняющих веществ 2909-р",
+          "description": "Разбор распоряжения 2909-р для участников клуба.",
+          "audience": "club",
+          "track": "razbor_club.vtt"
+        },
+        {
+          "key": "lecture_public",
+          "post_id": 9002,
+          "owner_id": -100001,
+          "video_id": 222,
+          "link_type": "attachment",
+          "title": "Нормирование сбросов: практика",
+          "description": "Открытая лекция о нормировании сбросов.",
+          "audience": "public",
+          "track": "lecture_public.vtt"
+        }
+      ]
+    },
+    {
+      "schedule_row": "fixture-row-2",
+      "title": "Воздух и отходы",
+      "materials": [
+        {
+          "key": "same_title_public",
+          "post_id": 9003,
+          "owner_id": -100001,
+          "video_id": 333,
+          "link_type": "attachment",
+          "title": "Разбор перечня загрязняющих веществ 2909-р",
+          "description": "Одноимённая открытая запись о перечне для атмосферного воздуха.",
+          "audience": "public",
+          "track": "same_title_public.vtt"
+        },
+        {
+          "key": "card_only_public",
+          "post_id": 9004,
+          "owner_id": -100001,
+          "video_id": 444,
+          "link_type": "attachment",
+          "title": "Паспортизация отходов I–IV классов опасности",
+          "description": "Запись о паспортизации отходов. Субтитров нет.",
+          "audience": "public",
+          "track": null
+        }
+      ]
+    }
+  ]
+}

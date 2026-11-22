@@ -1,0 +1,112 @@
+# Стенд первого серверного сценария (specs/001-find-lecture-episode).
+# Секреты берутся из .env (образец — .env.example) и передаются только тому
+# сервису, которому они нужны.
+name: ecoprofi
+
+x-app: &app
+  build: .
+  image: ecoprofi-app:local
+  networks: [internal]
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ecoprofi
+      POSTGRES_USER: ecoprofi_owner
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в .env}
+      BOT_DB_PASSWORD: ${BOT_DB_PASSWORD:?задайте BOT_DB_PASSWORD в .env}
+      INDEXER_DB_PASSWORD: ${INDEXER_DB_PASSWORD:?задайте INDEXER_DB_PASSWORD в .env}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ecoprofi_owner -d ecoprofi"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [internal]
+    restart: unless-stopped
+
+  bot:
+    <<: *app
+    command: ["uvicorn", "ecoprofi.bot.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      DATABASE_URL: postgresql://ecoprofi_bot:${BOT_DB_PASSWORD}@db:5432/ecoprofi
+      # Роль владельца схемы нужна только командам migrate и import_policy.
+      MIGRATION_DATABASE_URL: postgresql://ecoprofi_owner:${POSTGRES_PASSWORD}@db:5432/ecoprofi
+      SERVICE_KEY: ${SERVICE_KEY:?задайте SERVICE_KEY в .env}
+      YANDEX_FOLDER_ID: ${YANDEX_FOLDER_ID:-}
+      YANDEX_API_KEY: ${YANDEX_API_KEY:-}
+      YANDEX_QUERY_EMBEDDING_MODEL: ${YANDEX_QUERY_EMBEDDING_MODEL:-}
+      YANDEX_COMPLETION_MODEL: ${YANDEX_COMPLETION_MODEL:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  vk-adapter:
+    <<: *app
+    command: ["python", "-m", "ecoprofi.vk_adapter"]
+    environment:
+      BOT_URL: http://bot:8000
+      SERVICE_KEY: ${SERVICE_KEY}
+      VK_GROUP_ID: ${VK_GROUP_ID:-}
+      VK_GROUP_TOKEN: ${VK_GROUP_TOKEN:-}
+    depends_on: [bot]
+    restart: unless-stopped
+
+  # Одноразовый проход: docker compose run --rm indexer python -m ecoprofi.indexer ...
+  # Токен оператора вводится в скрытое приглашение и в окружение не попадает.
+  indexer:
+    <<: *app
+    profiles: [indexer]
+    command: ["python", "-m", "ecoprofi.indexer"]
+    environment:
+      DATABASE_URL: postgresql://ecoprofi_indexer:${INDEXER_DB_PASSWORD}@db:5432/ecoprofi
+      YANDEX_FOLDER_ID: ${YANDEX_FOLDER_ID:-}
+      YANDEX_API_KEY: ${YANDEX_API_KEY:-}
+      YANDEX_DOC_EMBEDDING_MODEL: ${YANDEX_DOC_EMBEDDING_MODEL:-}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Интеграционные проверки: docker compose --profile test run --rm tests
+  # Отдельная БД в памяти, рабочий том не затрагивается.
+  test-db:
+    image: pgvector/pgvector:pg16
+    profiles: [test]
+    environment:
+      POSTGRES_DB: ecoprofi_test
+      POSTGRES_USER: ecoprofi_owner
+      POSTGRES_PASSWORD: test-owner
+      BOT_DB_PASSWORD: test-bot
+      INDEXER_DB_PASSWORD: test-indexer
+    volumes:
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ecoprofi_owner -d ecoprofi_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [internal]
+
+  tests:
+    <<: *app
+    profiles: [test]
+    command: ["pytest"]
+    environment:
+      TEST_OWNER_DATABASE_URL: postgresql://ecoprofi_owner:test-owner@test-db:5432/ecoprofi_test
+      TEST_BOT_DATABASE_URL: postgresql://ecoprofi_bot:test-bot@test-db:5432/ecoprofi_test
+      TEST_INDEXER_DATABASE_URL: postgresql://ecoprofi_indexer:test-indexer@test-db:5432/ecoprofi_test
+    depends_on:
+      test-db:
+        condition: service_healthy
+
+volumes:
+  db-data:
+
+networks:
+  internal:

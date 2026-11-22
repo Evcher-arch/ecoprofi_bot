@@ -1,0 +1,24 @@
+# Секреты и локальные настройки пилота
+.env
+.env.*
+!.env.example
+pilot-policy.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+
+# Среда и ОС
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+*.log

@@ -1,0 +1,35 @@
+{
+  "comment": "Форма ответа wall.get (v5.199) с прямыми видеовложениями. Адреса дорожек условные: фиктивный транспорт сопоставляет их с файлами .vtt этой папки.",
+  "response": {
+    "count": 4,
+    "items": [
+      {
+        "id": 9001, "owner_id": -100001, "text": "Разбор 2909-р",
+        "attachments": [{"type": "video", "video": {
+          "owner_id": -100001, "id": 111, "title": "Разбор перечня загрязняющих веществ 2909-р",
+          "description": "Разбор распоряжения 2909-р для участников клуба.", "duration": 2700,
+          "subtitles": [{"lang": "ru", "url": "https://fixture.invalid/razbor_club.vtt"}]}}]
+      },
+      {
+        "id": 9002, "owner_id": -100001, "text": "Открытая лекция",
+        "attachments": [{"type": "video", "video": {
+          "owner_id": -100001, "id": 222, "title": "Нормирование сбросов: практика",
+          "description": "Открытая лекция о нормировании сбросов.", "duration": 2400,
+          "subtitles": [{"lang": "ru", "url": "https://fixture.invalid/lecture_public.vtt"}]}}]
+      },
+      {
+        "id": 9003, "owner_id": -100001, "text": "Воздух",
+        "attachments": [{"type": "video", "video": {
+          "owner_id": -100001, "id": 333, "title": "Разбор перечня загрязняющих веществ 2909-р",
+          "description": "Одноимённая открытая запись о перечне для атмосферного воздуха.", "duration": 1500,
+          "subtitles": [{"lang": "ru", "url": "https://fixture.invalid/same_title_public.vtt"}]}}]
+      },
+      {
+        "id": 9004, "owner_id": -100001, "text": "Отходы",
+        "attachments": [{"type": "video", "video": {
+          "owner_id": -100001, "id": 444, "title": "Паспортизация отходов I–IV классов опасности",
+          "description": "Запись о паспортизации отходов. Субтитров нет.", "duration": 1800}}]
+      }
+    ]
+  }
+}
