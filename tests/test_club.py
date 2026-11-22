@@ -98,3 +98,30 @@ def test_settings_from_environment(monkeypatch):
     assert (club.group_id, club._ttl) == (123, 15.0)
     monkeypatch.delenv("CLUB_GROUP_ID")
     assert ClubMembers.from_env().group_id == CLUB_GROUP_ID
+
+
+# --- исключения: владелец и администраторы сообщества без подписки ---
+
+def test_exempt_user_is_admitted_without_asking_vk():
+    calls = []
+    club = ClubMembers(TOKEN, transport=vk([11], calls=calls), exempt={177068782})
+    assert club(177068782) and calls == []
+    assert club(11) and not club(12)
+
+
+def test_exempt_user_is_admitted_when_check_fails():
+    club = ClubMembers("", transport=vk([], error=15), exempt={177068782})
+    assert club(177068782)
+    with pytest.raises(ClubUnavailable):
+        club(11)
+
+
+def test_exempt_ids_from_environment(monkeypatch):
+    monkeypatch.setenv("CLUB_GROUP_TOKEN", TOKEN)
+    monkeypatch.setenv("CLUB_EXEMPT_IDS", "177068782, 5")
+    assert ClubMembers.from_env().exempt == {177068782, 5}
+    monkeypatch.setenv("CLUB_EXEMPT_IDS", "")
+    assert ClubMembers.from_env().exempt == frozenset()
+    monkeypatch.setenv("CLUB_EXEMPT_IDS", "177068782,admin")
+    with pytest.raises(ValueError, match="admin"):
+        ClubMembers.from_env()

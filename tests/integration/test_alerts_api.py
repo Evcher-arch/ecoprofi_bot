@@ -129,3 +129,16 @@ def test_refusal_to_non_subscriber_opens_nothing(stand):
     stand.import_policy()
     assert stand.post(stand.outsider, "перечень").status_code == 200
     assert stand.alerts() == {}
+
+
+def test_exempt_owner_searches_while_check_fails_and_cause_stays_open(stand):
+    from ecoprofi.bot.club import ClubUnavailable
+
+    stand.import_policy()
+    owner = stand.users["unknown"]                 # без подписки
+    stand.club.exempt.add(owner)
+    stand.club.failure = ClubUnavailable("VK недоступен")
+    assert stand.post(stand.users["club"], "перечень").status_code == 503
+    answer = stand.post(owner, "загрязняющих веществ")
+    assert answer.status_code == 200 and answer.json()["outcome"] != "not_subscribed"
+    assert "club" in stand.alerts()                # исключение не закрывает причину: VK не проверялся

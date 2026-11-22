@@ -133,10 +133,13 @@ class FakeClub:
 
     def __init__(self, members):
         self.members = set(members)
+        self.exempt: set[int] = set()          # допущенные без подписки (CLUB_EXEMPT_IDS)
         self.calls = 0
         self.failure: Exception | None = None
 
     def __call__(self, user_id: int) -> bool:
+        if user_id in self.exempt:
+            return True
         self.calls += 1
         if self.failure is not None:
             raise self.failure

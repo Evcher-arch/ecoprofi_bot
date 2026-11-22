@@ -73,6 +73,8 @@ services:
       CLUB_GROUP_TOKEN: ${CLUB_GROUP_TOKEN:-}
       CLUB_GROUP_ID: ${CLUB_GROUP_ID:-95098598}
       CLUB_CACHE_SECONDS: ${CLUB_CACHE_SECONDS:-60}
+      # Допущенные без подписки (владелец и администраторы сообщества): VK ID через запятую.
+      CLUB_EXEMPT_IDS: ${CLUB_EXEMPT_IDS:-}
       # Ссылка на оформление подписки в ответе неподписчику; без значения — только текст.
       CLUB_URL: ${CLUB_URL:-}
     depends_on:

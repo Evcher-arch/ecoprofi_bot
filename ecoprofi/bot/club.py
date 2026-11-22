@@ -4,6 +4,10 @@
 сообщества Экопрофи (CLUB_GROUP_TOKEN) и держится в памяти CLUB_CACHE_SECONDS
 секунд: оформленная или отменённая подписка учитывается не позже, чем через
 этот срок. Ключ сообщества в журнал и исключения не попадает.
+
+Исключения (CLUB_EXEMPT_IDS) — участники, допущенные без подписки: владелец и
+администраторы сообщества, у которых формально подписки нет. Их допуск не зависит
+от VK: он действует и при сбое проверки подписки.
 """
 import logging
 import os
@@ -24,12 +28,23 @@ class ClubUnavailable(Exception):
     """Подписку проверить не удалось (нет ключа, отказ или сбой VK): доступ не выдаётся."""
 
 
+def parse_exempt(value: str) -> frozenset[int]:
+    """Список VK ID через запятую или пробел. Нечисловое значение — ошибка настройки, а не пропуск."""
+    ids = set()
+    for part in value.replace(",", " ").split():
+        if not part.isdigit() or int(part) <= 0:
+            raise ValueError(f"CLUB_EXEMPT_IDS: «{part}» не является положительным VK ID.")
+        ids.add(int(part))
+    return frozenset(ids)
+
+
 class ClubMembers:
     """Подписчики клуба: is_member(user_id) -> bool."""
 
     def __init__(self, token: str, group_id: int = CLUB_GROUP_ID, *, ttl: float = DEFAULT_TTL,
-                 transport: httpx.BaseTransport | None = None, clock=time.monotonic):
+                 transport: httpx.BaseTransport | None = None, clock=time.monotonic, exempt=()):
         self._token = token
+        self.exempt = frozenset(int(x) for x in exempt)
         self.group_id = group_id
         self._ttl = ttl
         self._clock = clock
@@ -44,12 +59,15 @@ class ClubMembers:
         ttl = os.environ.get("CLUB_CACHE_SECONDS", "")
         return cls(os.environ.get("CLUB_GROUP_TOKEN", ""),
                    int(group) if group.isdigit() else CLUB_GROUP_ID,
-                   ttl=float(ttl) if ttl.replace(".", "", 1).isdigit() else DEFAULT_TTL)
+                   ttl=float(ttl) if ttl.replace(".", "", 1).isdigit() else DEFAULT_TTL,
+                   exempt=parse_exempt(os.environ.get("CLUB_EXEMPT_IDS", "")))
 
     def __call__(self, user_id: int) -> bool:
         return self.is_member(user_id)
 
     def is_member(self, user_id: int) -> bool:
+        if user_id in self.exempt:
+            return True                  # допуск без подписки: VK не запрашивается
         with self._lock:
             if self._members is None or self._clock() - self._loaded_at >= self._ttl:
                 self._members = self._load()

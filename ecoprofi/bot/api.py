@@ -189,7 +189,8 @@ def create_app(*, connect_fn=None, ai=None, service_key: str | None = None, club
                 # Права проверяются до обращения к модели и до любого поиска.
                 club = get_club()
                 resolve_access(conn, request.group_id, request.peer_id, request.user_id, club)
-                club_alert(False)
+                if request.user_id not in getattr(club, "exempt", ()):
+                    club_alert(False)        # исключение VK не запрашивает и о проверке не говорит
                 return answer(conn, get_ai(), request, club)
         except NotSubscribed:
             # Подписки нет (или она отменена во время обработки): найденное не выдаётся.
