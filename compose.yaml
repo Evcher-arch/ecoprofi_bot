@@ -1,4 +1,5 @@
-# Стенд пилота (specs/001-find-lecture-episode, specs/002-slides-letters-schedule).
+# Стенд пилота (specs/001-find-lecture-episode, specs/002-slides-letters-schedule,
+# specs/003-autonomous-indexer).
 # Секреты берутся из .env (образец — .env.example) и передаются только тому
 # сервису, которому они нужны.
 name: ecoprofi
@@ -17,6 +18,23 @@ x-indexer: &indexer
     target: indexer
   image: ecoprofi-indexer:local
   networks: [internal]
+
+# Окружение индексатора: общее для разовых команд и сервиса indexer-daemon.
+# Значения доступа оператора лежат на томе indexer-secrets, а не в окружении.
+# Ключ сообщества Экопрофи (CLUB_GROUP_TOKEN) индексатору не передаётся: он только у bot.
+x-indexer-env: &indexer-env
+  DATABASE_URL: postgresql://ecoprofi_indexer:${INDEXER_DB_PASSWORD}@db:5432/ecoprofi
+  YANDEX_FOLDER_ID: ${YANDEX_FOLDER_ID:-}
+  YANDEX_API_KEY: ${YANDEX_API_KEY:-}
+  YANDEX_DOC_EMBEDDING_MODEL: ${YANDEX_DOC_EMBEDDING_MODEL:-}
+  VK_ID_APP: ${VK_ID_APP:-}
+  ACCESS_FILE: /secrets/access.json
+  SCHEDULE_URL: ${SCHEDULE_URL:-https://vk.ru/@eco_manager_iso-raspisanie-lekcii-ekobezbez-granic}
+  RUN_PORTION: ${RUN_PORTION:-5}
+  PERMANENT_AFTER_RUNS: ${PERMANENT_AFTER_RUNS:-3}
+  # Платная лента читается доступом оператора; меньше этой доли прежнего объёма — остановка (FR-23).
+  PAID_FEED_MIN_RATIO: ${PAID_FEED_MIN_RATIO:-0.5}
+  TZ: Europe/Moscow
 
 services:
   db:
@@ -50,6 +68,7 @@ services:
       YANDEX_API_KEY: ${YANDEX_API_KEY:-}
       YANDEX_QUERY_EMBEDDING_MODEL: ${YANDEX_QUERY_EMBEDDING_MODEL:-}
       YANDEX_COMPLETION_MODEL: ${YANDEX_COMPLETION_MODEL:-}
+      ALERT_STALE_HOURS: ${ALERT_STALE_HOURS:-48}
       # Допуск к поиску — подписка на клуб Экопрофи (VK Donut); ключ сообщества Экопрофи.
       CLUB_GROUP_TOKEN: ${CLUB_GROUP_TOKEN:-}
       CLUB_GROUP_ID: ${CLUB_GROUP_ID:-95098598}
@@ -69,23 +88,36 @@ services:
       SERVICE_KEY: ${SERVICE_KEY}
       VK_GROUP_ID: ${VK_GROUP_ID:-}
       VK_GROUP_TOKEN: ${VK_GROUP_TOKEN:-}
+      # Получатель оповещений оператору; без значения оповещения копятся в БД.
+      ALERT_VK_USER_ID: ${ALERT_VK_USER_ID:-}
     depends_on: [bot]
     restart: unless-stopped
 
-  # Одноразовый проход: docker compose run --rm indexer python -m ecoprofi.indexer ...
-  # Токен оператора вводится в скрытое приглашение и в окружение не попадает.
+  # Разовые команды оператора: docker compose run --rm indexer python -m ecoprofi.indexer ...
+  # Вход выполняется один раз командой «access login»; доступ хранится на томе indexer-secrets.
   indexer:
     <<: *indexer
     profiles: [indexer]
-    command: ["python", "-m", "ecoprofi.indexer"]
-    environment:
-      DATABASE_URL: postgresql://ecoprofi_indexer:${INDEXER_DB_PASSWORD}@db:5432/ecoprofi
-      YANDEX_FOLDER_ID: ${YANDEX_FOLDER_ID:-}
-      YANDEX_API_KEY: ${YANDEX_API_KEY:-}
-      YANDEX_DOC_EMBEDDING_MODEL: ${YANDEX_DOC_EMBEDDING_MODEL:-}
+    command: ["python", "-m", "ecoprofi.indexer", "status"]
+    environment: *indexer-env
+    volumes:
+      - indexer-secrets:/secrets
     depends_on:
       db:
         condition: service_healthy
+
+  # Плановые обновления утром и вечером: docker compose --profile daemon up -d indexer-daemon
+  indexer-daemon:
+    <<: *indexer
+    profiles: [daemon]
+    command: ["python", "-m", "ecoprofi.indexer.daemon"]
+    environment: *indexer-env
+    volumes:
+      - indexer-secrets:/secrets
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
 
   # Интеграционные проверки: docker compose --profile test run --rm tests
   # Отдельная БД в памяти, рабочий том не затрагивается.
@@ -123,6 +155,8 @@ services:
 
 volumes:
   db-data:
+  # Значения доступа оператора VK: том подключён только к сервисам индексатора.
+  indexer-secrets:
 
 networks:
   internal:

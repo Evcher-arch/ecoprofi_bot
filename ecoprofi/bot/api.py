@@ -1,4 +1,6 @@
-"""FastAPI: POST /api/search — внутренний контракт адаптера (contracts/local-dialog.md)."""
+"""FastAPI: POST /api/search — внутренний контракт адаптера (contracts/local-dialog.md);
+GET /api/alerts/pending и POST /api/alerts/{id}/sent — очередь оповещений оператору
+(specs/003-autonomous-indexer/contracts/alerts.md)."""
 import hashlib
 import logging
 import os
@@ -9,6 +11,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from ecoprofi import telemetry
 from ecoprofi.ai import AIError, YandexAI
+from ecoprofi.bot import alerts as alert_queue
+from ecoprofi.indexer import alerts as alert_causes
 from ecoprofi.bot import cards as cards_module
 from ecoprofi.bot import events
 from ecoprofi.bot.access import (Forbidden, NotSubscribed, Unauthorized, check_service_key, resolve_access,
@@ -80,6 +84,10 @@ class DeliveredRequest(BaseModel):
     group_id: int = Field(gt=0)
 
 
+class AlertSentRequest(BaseModel):
+    send_no: int = Field(ge=1)
+
+
 def answer(conn, ai, request: SearchRequest, is_member) -> dict:
     """Обработать событие: права, поиск, сборка карточек, перепроверка перед возвратом."""
     operation_id = telemetry.new_operation_id()
@@ -147,6 +155,23 @@ def create_app(*, connect_fn=None, ai=None, service_key: str | None = None, club
             app.state.club = ClubMembers.from_env()
         return app.state.club
 
+    # None — неизвестно, открыта ли причина «club»: первая удачная проверка закроет её, если была.
+    app.state.club_alert = None
+
+    def club_alert(opened: bool) -> None:
+        """Сбой проверки подписки закрывает поиск всем: оператор узнаёт из оповещения (FR-24)."""
+        if app.state.club_alert is opened:
+            return
+        try:
+            with app.state.connect() as conn:
+                if opened:
+                    alert_causes.open_alert(conn, "club", alert_causes.text_club())
+                else:
+                    alert_causes.close_alert(conn, "club")
+            app.state.club_alert = opened
+        except Exception as exc:     # оповещение вспомогательное: ответ участнику не зависит от него
+            logging.getLogger("ecoprofi.bot").warning("оповещение club не записано (%s)", type(exc).__name__)
+
     def service_key_checked(x_service_key: str | None = Header(default=None)):
         try:
             check_service_key(x_service_key, service_key)
@@ -164,15 +189,18 @@ def create_app(*, connect_fn=None, ai=None, service_key: str | None = None, club
                 # Права проверяются до обращения к модели и до любого поиска.
                 club = get_club()
                 resolve_access(conn, request.group_id, request.peer_id, request.user_id, club)
+                club_alert(False)
                 return answer(conn, get_ai(), request, club)
         except NotSubscribed:
             # Подписки нет (или она отменена во время обработки): найденное не выдаётся.
+            club_alert(False)
             with app.state.connect() as conn:
                 return refuse_not_subscribed(conn, request)
         except Forbidden as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from None
         except ClubUnavailable as exc:
             # Подписка не подтверждена — ответа нет; адаптер повторит тот же event_id.
+            club_alert(True)
             raise HTTPException(status_code=503, detail=str(exc)) from None
         except AIError as exc:
             # Временная недоступность: адаптер повторит тот же event_id.
@@ -183,6 +211,17 @@ def create_app(*, connect_fn=None, ai=None, service_key: str | None = None, club
         with app.state.connect() as conn:
             events.mark_delivered(conn, request.group_id, request.event_id)
         return {"status": "ok"}
+
+    @app.get("/api/alerts/pending", dependencies=[Depends(service_key_checked)])
+    def alerts_pending():
+        with app.state.connect() as conn:
+            return {"alerts": alert_queue.pending(conn)}
+
+    @app.post("/api/alerts/{alert_id}/sent", dependencies=[Depends(service_key_checked)])
+    def alert_sent(alert_id: int, request: AlertSentRequest):
+        with app.state.connect() as conn:
+            changed = alert_queue.mark_sent(conn, alert_id, request.send_no)
+        return {"status": "ok", "changed": changed}
 
     return app
 

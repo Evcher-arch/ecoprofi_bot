@@ -7,13 +7,15 @@
 """
 import hashlib
 import json
+import os
 import time
 from datetime import datetime, timedelta, timezone
 
 from ecoprofi import telemetry
+from ecoprofi.ai import AILimit
 from ecoprofi.indexer import documents
 from ecoprofi.indexer.retry import (
-    SourceDeleted, SourceEmpty, SourceError, SourceParse, with_retry,
+    SourceAuth, SourceDeleted, SourceEmpty, SourceError, SourceParse, SourceRateLimit, with_retry,
 )
 from ecoprofi.indexer.subtitles import SubtitleParseError, episodes_from_vtt
 from ecoprofi.indexer.vk_sources import DocSource, VideoSource, post_url
@@ -22,6 +24,15 @@ from ecoprofi.textkeys import doc_numbers, material_key
 PROCESSOR_VERSION = "subtitles-2"   # 2: повторы «бегущих» реплик, стыкующихся по времени
 DOC_PROCESSOR_VERSION = "documents-2"   # 2: реквизиты в заголовке письма, порог читаемости страниц
 RETRY_AFTER = timedelta(minutes=15)
+
+# Причины, которые касаются всего прохода, а не одного материала: проход останавливается,
+# материал возвращается в очередь без расхода счётчика постоянного сбоя.
+RUN_STOPPERS = (SourceAuth, SourceRateLimit, AILimit)
+
+
+def permanent_after() -> int:
+    """Число проходов подряд без успеха, после которого материал считается постоянным сбоем."""
+    return max(1, int(os.environ.get("PERMANENT_AFTER_RUNS", "3")))
 
 
 def content_hash(source: VideoSource, track: bytes | None) -> str:
@@ -42,20 +53,37 @@ def _item(source) -> tuple[str, int, int]:
 
 
 def _set_job(conn, source, state: str, *, reason: str | None = None,
-             attempt: int | None = None, retry_at=None) -> None:
+             attempt: int | None = None, retry_at=None, run_id: int | None = None) -> None:
     item_type, owner_id, item_id = _item(source)
     conn.execute(
         """
-        INSERT INTO index_job (item_type, owner_id, item_id, post_id, state, attempt, failure_reason, retry_at)
-        VALUES (%(k)s, %(o)s, %(v)s, %(p)s, %(s)s, coalesce(%(a)s, 0), %(r)s, %(t)s)
+        INSERT INTO index_job (item_type, owner_id, item_id, post_id, state, attempt, failure_reason, retry_at,
+                               last_run_id)
+        VALUES (%(k)s, %(o)s, %(v)s, %(p)s, %(s)s, coalesce(%(a)s, 0), %(r)s, %(t)s, %(run)s)
         ON CONFLICT (item_type, owner_id, item_id) DO UPDATE SET
             post_id = excluded.post_id, state = excluded.state,
             attempt = coalesce(%(a)s, index_job.attempt),
-            failure_reason = excluded.failure_reason, retry_at = excluded.retry_at, updated_at = now()
+            failure_reason = excluded.failure_reason, retry_at = excluded.retry_at, updated_at = now(),
+            last_run_id = coalesce(%(run)s, index_job.last_run_id),
+            -- Успех обнуляет счётчик проходов без успеха.
+            failed_runs = CASE WHEN excluded.state = 'done' THEN 0 ELSE index_job.failed_runs END
         """,
         {"k": item_type, "o": owner_id, "v": item_id, "p": source.post_id,
-         "s": state, "a": attempt, "r": reason, "t": retry_at},
+         "s": state, "a": attempt, "r": reason, "t": retry_at, "run": run_id},
     )
+
+
+def _count_failed_run(conn, source) -> bool:
+    """Учесть проход без успеха. True — материал переведён в постоянный сбой."""
+    key = _item(source)
+    failed = conn.execute(
+        "UPDATE index_job SET failed_runs = failed_runs + 1 "
+        "WHERE item_type = %s AND owner_id = %s AND item_id = %s RETURNING failed_runs", key).fetchone()
+    if failed is None or failed["failed_runs"] < permanent_after():
+        return False
+    conn.execute("UPDATE index_job SET state = 'permanent', retry_at = NULL "
+                 "WHERE item_type = %s AND owner_id = %s AND item_id = %s", key)
+    return True
 
 
 def _published(conn, source) -> dict | None:
@@ -209,7 +237,10 @@ def publish_document(conn, ai, community_id: int, source: DocSource, lecture_id:
         with conn.transaction():
             _lock(conn, source)
             _link(conn, lecture_id, current["material_id"], source)
-            _set_job(conn, source, "done")
+            fmt = conn.execute("SELECT source_format FROM material WHERE id = %s",
+                               (current["material_id"],)).fetchone()["source_format"]
+            # Неподдерживаемый формат остаётся итогом и при повторе без изменений.
+            _set_job(conn, source, "done", reason="unsupported" if fmt == "unsupported" else None)
             row = conn.execute(
                 "SELECT m.kind, v.pages_total, v.pages_unreadable, v.text_state, "
                 "(SELECT count(*) FROM fragment f WHERE f.version_id = v.id) AS n "
@@ -313,34 +344,59 @@ def unpublish_post(conn, post_id: int) -> int:
             (ids,)).rowcount
 
 
-def _run(conn, ai, source, work, ref: str, details) -> dict:
-    """Общий цикл одного материала: задание, обработка, статус сбоя, измерение."""
+def _run(conn, ai, source, work, ref: str, details, run_id: int | None = None) -> dict:
+    """Общий цикл одного материала: задание, обработка, статус сбоя, измерение.
+
+    run_id — проход, в рамках которого идёт обработка: по нему продолжение пропускает
+    уже обработанные материалы и считаются проходы без успеха.
+    """
     operation_id = telemetry.new_operation_id()
     started = time.monotonic()
     with conn.transaction():
-        _set_job(conn, source, "running")
+        _set_job(conn, source, "running", run_id=run_id)
     attempts = [1]
+
+    def failed(state: str, reason: str, tries: int, retry_at) -> str:
+        with conn.transaction():
+            _set_job(conn, source, state, reason=reason, attempt=tries, retry_at=retry_at)
+            if run_id is not None and _count_failed_run(conn, source):
+                state = "permanent"
+        return f"{state}:{reason}"
+
     try:
         result = work(attempts)
         outcome = "published" if result["created"] else "unchanged"
         summary = {"ref": ref, "outcome": outcome, **result}
+        with conn.transaction():
+            # Запись без дорожки опубликована карточкой и ждёт появления источника.
+            conn.execute("UPDATE index_job SET waiting_source = %s "
+                         "WHERE item_type = %s AND owner_id = %s AND item_id = %s",
+                         (result.get("track") is False, *_item(source)))
+    except RUN_STOPPERS as exc:
+        if run_id is not None:
+            # Проход останавливается целиком; материал возвращается в очередь без расхода счётчика.
+            # Незафиксированная часть — только чтение каталога: вызывающий фиксирует до обработки.
+            conn.rollback()
+            with conn.transaction():
+                _set_job(conn, source, "queued", run_id=run_id)
+            raise
+        # Разовые режимы 001–002: сбой одного материала, как прежде.
+        if isinstance(exc, SourceError):
+            outcome = failed("failed", exc.reason, attempts[0], None)
+        else:
+            outcome = failed("retry", "timeout", attempts[0], datetime.now(timezone.utc) + RETRY_AFTER)
+        summary = {"ref": ref, "outcome": outcome, "error": str(exc)}
     except SourceDeleted:
         unpublish_deleted(conn, source)
         outcome, summary = "deleted", {"ref": ref, "outcome": "deleted"}
     except SourceError as exc:
         tries = getattr(exc, "attempts", attempts[0])
-        state = "retry" if exc.temporary else "failed"
         retry_at = datetime.now(timezone.utc) + RETRY_AFTER if exc.temporary else None
-        with conn.transaction():
-            _set_job(conn, source, state, reason=exc.reason, attempt=tries, retry_at=retry_at)
+        outcome = failed("retry" if exc.temporary else "failed", exc.reason, tries, retry_at)
         attempts[0] = tries
-        outcome = f"{state}:{exc.reason}"
         summary = {"ref": ref, "outcome": outcome, "error": str(exc)}
     except Exception as exc:  # сбой векторизации и прочее: прежняя версия сохраняется
-        with conn.transaction():
-            _set_job(conn, source, "retry", reason="timeout", attempt=attempts[0],
-                     retry_at=datetime.now(timezone.utc) + RETRY_AFTER)
-        outcome = "retry:timeout"
+        outcome = failed("retry", "timeout", attempts[0], datetime.now(timezone.utc) + RETRY_AFTER)
         summary = {"ref": ref, "outcome": outcome, "error": f"{type(exc).__name__}: {exc}"}
     with conn.transaction():
         telemetry.record(
@@ -352,17 +408,19 @@ def _run(conn, ai, source, work, ref: str, details) -> dict:
     return summary
 
 
-def index_video(conn, ai, vk, source: VideoSource, schedule, *, sleep=time.sleep) -> dict:
+def index_video(conn, ai, vk, source: VideoSource, schedule, *, sleep=time.sleep,
+                run_id: int | None = None) -> dict:
     """Полный цикл одной записи. Возвращает итог без секретов и временных адресов."""
     def work(attempts):
         track, attempts[0] = read_track(vk, source, sleep=sleep)
         return publish_version(conn, ai, source, schedule, track)
 
     return _run(conn, ai, source, work, f"{source.owner_id}_{source.video_id}",
-                lambda s: {"episodes": s.get("episodes")})
+                lambda s: {"episodes": s.get("episodes")}, run_id)
 
 
-def index_document(conn, ai, vk, source: DocSource, lecture_id: int, *, sleep=time.sleep, recognize=None) -> dict:
+def index_document(conn, ai, vk, source: DocSource, lecture_id: int, *, sleep=time.sleep, recognize=None,
+                   run_id: int | None = None) -> dict:
     """Полный цикл одного документа. Файл читается в память; при сбое повторяется только он."""
     def work(attempts):
         raw, attempts[0] = with_retry(lambda attempt: vk.read_document(source, documents.MAX_BYTES), sleep=sleep)
@@ -371,4 +429,4 @@ def index_document(conn, ai, vk, source: DocSource, lecture_id: int, *, sleep=ti
     return _run(conn, ai, source, work, material_key("doc", source.owner_id, source.doc_id),
                 lambda s: {"pages": s.get("pages"), "recognized_pages": s.get("recognized_pages"),
                            "fragments": s.get("fragments"), "embeddings": s.get("fragments") if s.get("created") else 0,
-                           "parse_ms": s.get("parse_ms")})
+                           "parse_ms": s.get("parse_ms")}, run_id)

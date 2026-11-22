@@ -27,8 +27,37 @@ class SourceEmpty(SourceError):
 
 
 class SourceDenied(SourceError):
-    """Отказ доступа оператору."""
+    """Отказ в доступе к одному объекту (закрытый документ, чужая запись)."""
     reason = "denied"
+
+
+class SourceAuth(SourceDenied):
+    """Отказ авторизации оператора: токен отозван, просрочен или не сохранён.
+
+    Касается всего прохода, а не одного материала: проход останавливается,
+    состояние доступа — «нужен вход».
+    """
+    reason = "auth"
+
+
+class PaidFeedDenied(SourceDenied):
+    """Платная лента закрыта доступу оператора: закончилась подписка или права в сообществе."""
+
+
+class PaidFeedLost(SourceError):
+    """Платная лента пуста или резко сократилась. Проход останавливается, каталог не меняется:
+    иначе платные публикации были бы сочтены пропавшими или открытыми."""
+    reason = "paid_feed"
+
+    def __init__(self, count: int | None, previous: int | None):
+        shown = "не читается" if count is None else f"записей {count}"
+        super().__init__(f"Платная лента {shown}" + (f", в прошлом успешном проходе {previous}" if previous else ""))
+        self.count, self.previous = count, previous
+
+
+class SourceRateLimit(SourceError):
+    """Источник ограничил частоту обращений; паузы не помогли. Проход приостанавливается."""
+    reason = "rate_limit"
 
 
 class SourceParse(SourceError):

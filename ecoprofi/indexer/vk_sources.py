@@ -1,11 +1,10 @@
 """Чтение прямых видеовложений контрольных постов VK.
 
 Функции выделены из диагностического Test-VkUserWall.py (он сохраняет свои режимы).
-Пользовательский токен оператора передаётся только параметром вызова, в журнал
-и в каталог не попадает. Адрес дорожки временный: используется для чтения и
+Токен оператора берётся из хранилища доступа (ecoprofi/indexer/access.py) перед
+каждым вызовом, в журнал и в каталог не попадает. Адрес дорожки временный: используется для чтения и
 не сохраняется.
 """
-import getpass
 import json
 import re
 import time
@@ -14,7 +13,10 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
-from ecoprofi.indexer.retry import SourceDeleted, SourceDenied, SourceEmpty, SourceParse, SourceTimeout
+from ecoprofi.indexer.retry import (
+    PaidFeedDenied, SourceAuth, SourceDeleted, SourceDenied, SourceEmpty, SourceParse, SourceRateLimit,
+    SourceTimeout,
+)
 
 API = "https://api.vk.com/method/"
 API_VERSION = "5.199"
@@ -32,8 +34,13 @@ CONTROL_SCHEDULE = {
 WALL_PAUSE = 0.35               # пауза между страницами ленты: лимит запросов VK
 _MENTION = re.compile(r"\b(doc|video)(-?\d+)_(\d+)")
 
-_DENIED = {5, 15, 30, 200, 201, 203, 204, 212, 214}   # авторизация и доступ
-_TEMPORARY = {1, 6, 9, 10, 29}                         # сбой сервера и лимиты
+_AUTH = 5                                              # авторизация оператора не прошла
+_DENIED = {15, 30, 200, 201, 203, 204, 212, 214}       # отказ в доступе к объекту
+_TEMPORARY = {1, 10}                                   # сбой сервера
+_TOO_FAST, _FLOOD, _DAILY_LIMIT = 6, 9, 29             # ограничения частоты
+MIN_INTERVAL = 0.34             # не более трёх вызовов API в секунду
+TOO_FAST_RETRIES = 10           # код 6: пауза в секунду и повтор без расхода попыток материала
+FLOOD_RETRIES, FLOOD_PAUSE = 3, 60.0
 
 
 @dataclass(frozen=True)
@@ -90,14 +97,6 @@ def video_url(owner_id: int, video_id: int) -> str:
     return f"https://vkvideo.ru/video{owner_id}_{video_id}"
 
 
-def read_token_hidden() -> str:
-    """Запросить токен оператора скрытым вводом."""
-    token = getpass.getpass("Пользовательский токен VK (ввод скрыт): ").strip()
-    if not token:
-        raise SourceDenied("Токен не введён.")
-    return token
-
-
 class HttpTransport:
     """Сетевой транспорт. В тестах заменяется объектом с теми же методами."""
 
@@ -134,26 +133,92 @@ class HttpTransport:
 
 
 class VkSources:
-    def __init__(self, token: str, transport=None, owner_id: int = OWNER_ID):
-        self._token = token
+    """Чтение источников VK от имени оператора.
+
+    access — хранилище доступа с методами token() и force_refresh(failed) либо
+    строка токена (проверки и разовые пробы). Частота вызовов ограничивается
+    только на настоящей сети.
+    """
+
+    def __init__(self, access, transport=None, owner_id: int = OWNER_ID, *,
+                 sleep=time.sleep, clock=time.monotonic, min_interval: float | None = None):
+        self._access = access
+        self._min_interval = (MIN_INTERVAL if transport is None else 0.0) if min_interval is None else min_interval
         self._transport = transport or HttpTransport()
+        self._sleep, self._clock = sleep, clock
+        self._last_call = None
         self.owner_id = owner_id
+        self.paid_feed_seen: int | None = None   # число записей платной ленты из последнего обхода
+
+    def _token(self) -> str:
+        return self._access if isinstance(self._access, str) else self._access.token()
+
+    def _throttle(self) -> None:
+        if self._min_interval and self._last_call is not None:
+            wait = self._min_interval - (self._clock() - self._last_call)
+            if wait > 0:
+                self._sleep(wait)
+        self._last_call = self._clock()
 
     def _call(self, method: str, **fields) -> dict | list:
-        result = self._transport.post(API + method, dict(fields, access_token=self._token, v=API_VERSION))
-        if not isinstance(result, dict):
-            raise SourceParse(f"{method}: неожиданный ответ.")
-        error = result.get("error")
-        if error:
+        refreshed = False
+        too_fast = flood = 0
+        while True:
+            token = self._token()
+            self._throttle()
+            result = self._transport.post(API + method, dict(fields, access_token=token, v=API_VERSION))
+            if not isinstance(result, dict):
+                raise SourceParse(f"{method}: неожиданный ответ.")
+            error = result.get("error")
+            if not error:
+                break
             code = error.get("error_code")
-            if code in _TEMPORARY:
+            if code == _AUTH:
+                # Рабочий токен мог истечь раньше срока: одно принудительное продление.
+                if refreshed or isinstance(self._access, str):
+                    raise SourceAuth(f"{method}: VK {code}")
+                self._access.force_refresh(token)
+                refreshed = True
+            elif code == _TOO_FAST:
+                too_fast += 1
+                if too_fast > TOO_FAST_RETRIES:
+                    raise SourceRateLimit(f"{method}: VK {code}")
+                self._sleep(1.0)
+            elif code == _FLOOD:
+                flood += 1
+                if flood > FLOOD_RETRIES:
+                    raise SourceRateLimit(f"{method}: VK {code}")
+                self._sleep(FLOOD_PAUSE)
+            elif code == _DAILY_LIMIT:
+                raise SourceRateLimit(f"{method}: VK {code}")
+            elif code in _TEMPORARY:
                 raise SourceTimeout(f"{method}: VK {code}")
-            if code in _DENIED:
+            elif code in _DENIED:
                 raise SourceDenied(f"{method}: VK {code}")
-            raise SourceParse(f"{method}: VK {code}")
+            else:
+                raise SourceParse(f"{method}: VK {code}")
         if "response" not in result:
             raise SourceParse(f"{method}: нет поля response.")
         return result["response"]
+
+    def paid_feed_count(self) -> int:
+        """Один вызов чтения платной ленты: проверка доступа оператора."""
+        page = self._call("wall.get", owner_id=self.owner_id, count=1, filter="donut")
+        if not isinstance(page, dict):
+            raise SourceParse("wall.get: неожиданный ответ.")
+        return int(page.get("count", 0))
+
+    def probe_by_id(self, post_ids) -> dict[int, dict | None]:
+        """Проба R10: возвращает ли wall.getById публикации и с какими признаками ленты."""
+        response = self._call("wall.getById", posts=",".join(f"{self.owner_id}_{p}" for p in post_ids))
+        items = response.get("items", []) if isinstance(response, dict) else response
+        found = {}
+        for post_id in post_ids:
+            item = self._pick(items, int(post_id))
+            found[int(post_id)] = None if item is None else {
+                "attachments": len(item.get("attachments") or []),
+                "fields": sorted(k for k in item if k in ("donut", "is_donut", "marked_as_ads", "post_type"))}
+        return found
 
     def _pick(self, items, post_id: int) -> dict | None:
         return next((p for p in items or []
@@ -214,7 +279,10 @@ class VkSources:
             if not isinstance(page, dict):
                 raise SourceParse("wall.get: неожиданный ответ.")
             items = page.get("items") or []
-            total = page.get("count", 0) if total is None else total
+            if total is None:
+                total = int(page.get("count", 0))
+                if feed == "donut":
+                    self.paid_feed_seen = total
             if not items:
                 return
             yield items
@@ -228,10 +296,14 @@ class VkSources:
         требует проверки и удаление не подтверждает.
         """
         wanted = {int(p): PostMaterials(int(p)) for p in post_ids}
+        self.paid_feed_seen = None
         for feed in ("donut", "owner"):
             if all(m.found for m in wanted.values()):
                 break
-            for items in self._wall_pages(feed, sleep):
+            pages = self._wall_pages(feed, sleep)
+            if feed == "donut":
+                pages = self._paid_pages(pages)
+            for items in pages:
                 for item in items:
                     result = wanted.get(item.get("id"))
                     if result is None or result.found or item.get("owner_id") != self.owner_id:
@@ -245,6 +317,16 @@ class VkSources:
                 if all(m.found for m in wanted.values()):
                     break
         return wanted
+
+    @staticmethod
+    def _paid_pages(pages):
+        """Отказ в доступе к платной ленте — отдельная причина: это доступ оператора, а не материала."""
+        try:
+            yield from pages
+        except SourceAuth:
+            raise
+        except SourceDenied as exc:
+            raise PaidFeedDenied(str(exc)) from None
 
     def _collect(self, item: dict, result: PostMaterials) -> None:
         texts, attached = [item.get("text") or ""], set()

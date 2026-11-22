@@ -1,9 +1,11 @@
 """Адаптер тестового диалога: python -m ecoprofi.vk_adapter
 
 Принимает личные message_new тестовой группы через Bots Long Poll, вызывает
-POST /api/search и отправляет ответ в исходный peer_id. Ключ сообщений и
-параметры Long Poll в журнал не выводятся.
+POST /api/search и отправляет ответ в исходный peer_id. Между циклами Long Poll
+забирает у bot очередь оповещений и отправляет их оператору (ALERT_VK_USER_ID).
+Ключ сообщений и параметры Long Poll в журнал не выводятся.
 """
+import hashlib
 import logging
 import os
 import sys
@@ -82,6 +84,53 @@ class BotClient:
         except httpx.HTTPError:
             pass  # отметка доставки вспомогательная
 
+    def alerts_pending(self) -> list[dict]:
+        try:
+            response = self._http.get("/api/alerts/pending")
+        except httpx.HTTPError:
+            raise BotUnavailable() from None
+        if response.status_code != 200:
+            raise BotUnavailable()
+        return response.json().get("alerts", [])
+
+    def alert_sent(self, alert_id: int, send_no: int) -> None:
+        try:
+            self._http.post(f"/api/alerts/{alert_id}/sent", json={"send_no": send_no})
+        except httpx.HTTPError:
+            raise BotUnavailable() from None
+
+
+def alert_random_id(alert_id: int, send_no: int) -> int:
+    """Один random_id на отправку: повтор после неясного исхода не даёт второго сообщения."""
+    digest = hashlib.sha256(f"alert:{alert_id}:{send_no}".encode()).digest()
+    return int.from_bytes(digest[:4], "big") % (2**31 - 1) + 1
+
+
+def flush_alerts(vk, bot, user_id: int) -> int:
+    """Отправить оповещения из очереди. Сбой не мешает обработке входящих сообщений."""
+    try:
+        messages = bot.alerts_pending()
+    except BotUnavailable:
+        log.warning("оповещения: bot недоступен")
+        return 0
+    sent = 0
+    for message in messages:
+        try:
+            vk.send(user_id, alert_random_id(message["id"], message["send_no"]), message["text"][:4000])
+        except SendUncertain:
+            log.warning("оповещение %s: исход отправки неизвестен, повтор в следующий раз", message["id"])
+            continue
+        except SendRejected:
+            log.warning("оповещение %s: VK отклонил отправку", message["id"])
+            continue
+        try:
+            bot.alert_sent(message["id"], message["send_no"])
+        except BotUnavailable:
+            log.warning("оповещение %s: отметка отправки не сохранена", message["id"])
+            continue
+        sent += 1
+    return sent
+
 
 def to_event(update: dict, group_id: int) -> dict | None:
     """Преобразовать обновление Long Poll в событие контракта. None — не наш случай."""
@@ -97,12 +146,20 @@ def to_event(update: dict, group_id: int) -> dict | None:
             "user_id": from_id, "text": text[:2000]}
 
 
-def run(vk, bot, *, sleep=time.sleep, max_polls: int | None = None) -> None:
+ALERT_INTERVAL = 60
+
+
+def run(vk, bot, *, sleep=time.sleep, max_polls: int | None = None, alert_user: int | None = None,
+        clock=time.monotonic) -> None:
     """Цикл Long Poll. После потери параметров они запрашиваются заново для той же группы."""
     server = None
     polls = 0
+    alerts_at = None
     while max_polls is None or polls < max_polls:
         polls += 1
+        if alert_user and (alerts_at is None or clock() - alerts_at >= ALERT_INTERVAL):
+            alerts_at = clock()
+            flush_alerts(vk, bot, alert_user)
         try:
             if server is None:
                 server = vk.long_poll_server()
@@ -142,7 +199,9 @@ def main() -> int:
         # Без настроек сервис ждёт, не перезапускаясь в цикле.
         while True:
             time.sleep(3600)
-    run(VkGroup(token, int(group)), BotClient(os.environ.get("BOT_URL", "http://bot:8000"), service_key))
+    alert_user = os.environ.get("ALERT_VK_USER_ID", "")
+    run(VkGroup(token, int(group)), BotClient(os.environ.get("BOT_URL", "http://bot:8000"), service_key),
+        alert_user=int(alert_user) if alert_user.isdigit() else None)
     return 0
 
 

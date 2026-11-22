@@ -28,5 +28,7 @@ RUN mkdir ecoprofi && touch ecoprofi/__init__.py     && pip install --no-cache-d
 COPY ecoprofi ./ecoprofi
 COPY migrations ./migrations
 COPY tests ./tests
+# Точка подключения тома со значениями доступа оператора: только владелец.
+RUN mkdir /secrets && chown ecoprofi:ecoprofi /secrets && chmod 700 /secrets
 USER ecoprofi
 CMD ["python", "-c", "print('Укажите команду сервиса в compose.yaml')"]

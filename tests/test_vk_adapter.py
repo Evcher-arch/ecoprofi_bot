@@ -115,3 +115,53 @@ def test_uncertain_send_keeps_random_id_and_asks_for_current_answer():
     assert deliver(vk, bot, event, sleep=no_sleep) == "sent"
     assert vk.sent == [(5001, 42, "только публичное")]
     assert len(bot.requests) == 2
+
+
+# --- функция 003: оповещения оператору ---
+
+from ecoprofi.vk_adapter.__main__ import alert_random_id, flush_alerts  # noqa: E402
+from ecoprofi.vk_adapter.delivery import SendRejected  # noqa: E402
+
+
+class AlertBot(FakeBot):
+    def __init__(self, queue, errors=()):
+        super().__init__()
+        self.queue, self.sent_marks, self.alert_errors = queue, [], list(errors)
+
+    def alerts_pending(self):
+        if self.alert_errors:
+            raise self.alert_errors.pop(0)
+        return [dict(m) for m in self.queue]
+
+    def alert_sent(self, alert_id, send_no):
+        self.sent_marks.append((alert_id, send_no))
+        self.queue = [m for m in self.queue if (m["id"], m["send_no"]) != (alert_id, send_no)]
+
+
+def test_alerts_go_to_operator_and_are_marked():
+    vk, bot = FakeVk([]), AlertBot([{"id": 1, "send_no": 1, "text": "нужен вход"}])
+    assert flush_alerts(vk, bot, 4242) == 1
+    assert vk.sent == [(4242, alert_random_id(1, 1), "нужен вход")] and bot.sent_marks == [(1, 1)]
+
+
+def test_uncertain_alert_send_is_repeated_with_same_random_id():
+    vk = FakeVk([], send_errors=[SendUncertain()])
+    bot = AlertBot([{"id": 3, "send_no": 2, "text": "напоминание"}])
+    assert flush_alerts(vk, bot, 4242) == 0 and bot.sent_marks == []
+    assert flush_alerts(vk, bot, 4242) == 1
+    assert vk.sent[0][1] == alert_random_id(3, 2) != alert_random_id(3, 1)
+
+
+def test_alert_failure_does_not_stop_incoming_messages():
+    vk = FakeVk([{"ts": "2", "updates": [update()]}], send_errors=[SendRejected()])
+    bot = AlertBot([{"id": 1, "send_no": 1, "text": "сбой"}])
+    run(vk, bot, sleep=no_sleep, max_polls=1, alert_user=4242)
+    assert [peer for peer, _, _ in vk.sent] == [5001] and bot.sent_marks == []
+    bot.alert_errors = [BotUnavailable()]
+    assert flush_alerts(vk, bot, 4242) == 0
+
+
+def test_without_operator_alerts_are_not_polled():
+    vk, bot = FakeVk([{"ts": "2", "updates": []}]), AlertBot([{"id": 1, "send_no": 1, "text": "x"}])
+    run(vk, bot, sleep=no_sleep, max_polls=1)
+    assert vk.sent == [] and bot.sent_marks == []

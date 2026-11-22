@@ -15,19 +15,27 @@ from ecoprofi.bot.api import create_app
 from ecoprofi.bot.import_policy import apply_policy, parse_policy
 from ecoprofi.bot.migrate import migrate
 from ecoprofi.db import connect
+from ecoprofi.indexer import runs
 from ecoprofi.indexer.__main__ import run_materials, run_posts
+from ecoprofi.indexer.access import Access, AccessStore, login_request
 from ecoprofi.indexer.retry import SourceDeleted, SourceTimeout
 from ecoprofi.indexer.schedule import parse_schedule, sync_schedule
+from ecoprofi.indexer.update import update_worklist
 from ecoprofi.indexer.vk_sources import VkSources
-from tests.fixtures import docs_corpus
+from tests.fixtures import docs_corpus, run_corpus
 from tests.fixtures.fake_ai import FakeAI
+from tests.fixtures.fake_vkid import FakeClock, FakeVkId, callback
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 SERVICE_KEY = "test-service-key"
 OWNER_ID = -100001
 TABLES = ("operation_log, index_job, event, dialog_context, participant, test_group, "
           "fragment, material_link, lecture_post, pilot_lecture, requisite_decision, "
-          "material_version, material, material_policy, lecture")
+          "material_version, material, material_policy, run_lecture, index_run, alert, lecture")
+RESET = ("UPDATE operator_access SET state = 'absent', logged_in_at = NULL, refreshed_at = NULL, "
+         "access_expires_at = NULL, refresh_expires_at = NULL, refresh_verified_at = NULL, "
+         "relogin_verified_at = NULL, last_denial = NULL; "
+         "UPDATE run_schedule SET morning = '07:00', evening = '19:00', enabled = false, last_due_at = NULL")
 
 
 def _dsn(name: str) -> str:
@@ -51,6 +59,11 @@ class FakeVkTransport:
         self.feeds: dict[str, list] = {"donut": [], "owner": []}   # ленты wall.get по фильтру
         self.files: dict[int, bytes] = {}                          # файлы документов по номеру
         self.file_failures: dict[int, list] = {}                   # очередь сбоев чтения файла
+        self.valid_tokens: set | None = None   # набор действующих рабочих токенов; None — любой
+        self.errors: dict[str, list] = {}      # очередь кодов ошибок VK по методу
+        self.crash_after_files: int | None = None   # «остановка стенда» после N чтений файлов
+        self.on_call = None                    # вызывается при каждом вызове API (сдвиг часов)
+        self.donut_count: int | None = None    # число записей платной ленты в ответе; None — длина списка
 
     def _video(self, owner_id, video_id):
         for item in self.items:
@@ -60,9 +73,18 @@ class FakeVkTransport:
                     return video
         return None
 
+    def file_reads(self) -> list[int]:
+        return [int(c[5:]) for c in self.calls if c.startswith("file:")]
+
     def post(self, url, fields):
         method = url.rsplit("/", 1)[-1]
         self.calls.append(method)
+        if self.on_call:
+            self.on_call(method)
+        if self.valid_tokens is not None and fields.get("access_token") not in self.valid_tokens:
+            return {"error": {"error_code": 5, "error_msg": "User authorization failed"}}
+        if self.errors.get(method):
+            return {"error": {"error_code": self.errors[method].pop(0)}}
         if method == "wall.getById":
             post_id = int(fields["posts"].split("_")[1])
             if post_id in self.missing_posts:
@@ -74,7 +96,8 @@ class FakeVkTransport:
         if method == "wall.get":
             items = self.feeds.get(fields.get("filter"), [])
             offset = int(fields.get("offset", 0))
-            return {"response": {"count": len(items), "items": items[offset:offset + int(fields.get("count", 100))]}}
+            count = self.donut_count if fields.get("filter") == "donut" and self.donut_count is not None else len(items)
+            return {"response": {"count": count, "items": items[offset:offset + int(fields.get("count", 100))]}}
         if method == "video.get":
             owner, video = (int(x) for x in fields["videos"].split("_")[:2])
             record = self._video(owner, video)
@@ -89,6 +112,9 @@ class FakeVkTransport:
     def get(self, url, limit=None):
         if url.startswith(docs_corpus.FILES):
             doc_id = int(url[len(docs_corpus.FILES):].split("?")[0])
+            if self.crash_after_files is not None and len(self.file_reads()) >= self.crash_after_files:
+                self.crash_after_files = None
+                raise KeyboardInterrupt("стенд остановлен")    # не перехватывается обработкой материала
             self.calls.append(f"file:{doc_id}")
             if self.file_failures.get(doc_id):
                 raise self.file_failures[doc_id].pop(0)
@@ -222,6 +248,58 @@ class Stand:
         self.use_docs()
         return self.materials_run()
 
+    # --- автономный индексатор (функция 003) ---
+    def use_run_corpus(self, n: int = 12) -> None:
+        """Расписание и ленты корпуса из n лекций по два письма."""
+        self.transport.feeds = run_corpus.feeds(n)
+        self.transport.files = run_corpus.files(n)
+        self.transport.donut_count = run_corpus.PAID_FEED_COUNT
+        with connect(self.indexer_dsn) as conn:
+            sync_schedule(conn, parse_schedule(run_corpus.schedule_html(n), community_id=OWNER_ID))
+
+    def vk(self, access=None) -> VkSources:
+        return VkSources(access or "fixture-token", transport=self.transport, owner_id=OWNER_ID,
+                         sleep=lambda s: None)
+
+    def run(self, kind: str = "full", *, portion: int = 5, access=None, worklist=None, report=None) -> dict:
+        with connect(self.indexer_dsn) as conn:
+            runs.reconcile(conn)
+            return runs.run(conn, self.ai, self.vk(access), kind, portion=portion, sleep=lambda s: None,
+                            worklist=worklist or runs.full_worklist, report=report)
+
+    def update(self, *, html=None, fetch=None, access=None) -> dict:
+        vk = self.vk(access)
+        fetch = fetch or (lambda: html or run_corpus.schedule_html())
+        return self.run("manual", access=access,
+                        worklist=lambda c: update_worklist(c, vk, self.ai, fetch=fetch, sleep=lambda s: None))
+
+    def login(self, tmp_path, *, clock=None, vkid=None) -> Access:
+        """Вход оператора через подмену VK ID; доступ хранится во временной папке."""
+        self.vkid = vkid or getattr(self, "vkid", None) or FakeVkId()
+        self.clock = clock or getattr(self, "clock", None) or FakeClock()
+        self.transport.valid_tokens = self.vkid.valid_access
+        access = Access(AccessStore(tmp_path / "access.json"), lambda: connect(self.indexer_dsn, vector=False),
+                        transport=self.vkid, clock=self.clock)
+        request = login_request("123456")
+        access.complete_login(request, callback(request.state))
+        return access
+
+    def job(self, key: str) -> dict | None:
+        kind = "doc" if key.startswith("doc") else "video"
+        owner, item = key[len(kind):].rsplit("_", 1)
+        return self.owner.execute("SELECT * FROM index_job WHERE item_type = %s AND owner_id = %s AND item_id = %s",
+                                  (kind, int(owner), int(item))).fetchone()
+
+    def catalog(self) -> dict:
+        return self.owner.execute(
+            "SELECT (SELECT count(*) FROM material) AS materials, (SELECT count(*) FROM material_version) AS versions, "
+            "(SELECT count(*) FROM material_link) AS links, (SELECT count(*) FROM fragment) AS fragments, "
+            "(SELECT count(*) FROM lecture) AS lectures").fetchone()
+
+    def alerts(self, state: str = "open") -> dict:
+        return {r["cause_key"]: r for r in self.owner.execute(
+            "SELECT * FROM alert WHERE state = %s ORDER BY id", (state,)).fetchall()}
+
     def doc(self, doc_id: int) -> dict | None:
         return self.owner.execute(
             "SELECT m.*, v.text_state, v.pages_total, v.pages_unreadable, "
@@ -259,6 +337,7 @@ def owner_conn():
 @pytest.fixture
 def stand(owner_conn):
     owner_conn.execute(f"TRUNCATE {TABLES} RESTART IDENTITY CASCADE")
+    owner_conn.execute(RESET)
     return Stand(owner_conn, _dsn("TEST_INDEXER_DATABASE_URL"), _dsn("TEST_BOT_DATABASE_URL"))
 
 

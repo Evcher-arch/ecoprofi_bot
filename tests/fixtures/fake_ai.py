@@ -48,12 +48,18 @@ class FakeAI:
         self.explain_calls: list[dict] = []   # что именно получила «модель»
         self.foreign_id: int | None = None    # подмешать посторонний идентификатор
         self.fail_embed = False
+        self.limit = None                     # код HTTP лимита/отказа ключа (AILimit)
+        self.embedded = 0                     # число векторизованных текстов
         self.before_explain = None            # вызывается перед ответом, для проверки гонок
 
     def embed_documents(self, texts):
         if self.fail_embed:
             from ecoprofi.ai import AIError
             raise AIError("fake outage")
+        if self.limit:
+            from ecoprofi.ai import AILimit
+            raise AILimit(self.limit)
+        self.embedded += len(texts)
         return [vector(t) for t in texts]
 
     def embed_query(self, text):

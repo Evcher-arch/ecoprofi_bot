@@ -6,6 +6,7 @@ tests/fixtures/fake_ai.py с тем же интерфейсом.
 import json
 import os
 import re
+import time
 from dataclasses import dataclass, field
 
 import httpx
@@ -14,10 +15,20 @@ from ecoprofi.db import EMBEDDING_DIM
 
 EMBEDDING_URL = "https://ai.api.cloud.yandex.net/foundationModels/v1/textEmbedding"
 CHAT_URL = "https://ai.api.cloud.yandex.net/v1/chat/completions"
+LIMIT_ATTEMPTS = 3
+LIMIT_DELAY = 2.0
 
 
 class AIError(RuntimeError):
     """Ошибка внешнего вызова или неожиданный ответ. Текст не содержит ключа."""
+
+
+class AILimit(AIError):
+    """Лимит исчерпан или ключ отклонён (HTTP 401, 403, 429): повтор материала не поможет."""
+
+    def __init__(self, status: int):
+        super().__init__(f"AI Studio отклонил запрос: HTTP {status}.")
+        self.status = status
 
 
 @dataclass
@@ -65,6 +76,8 @@ class YandexAI:
             response = self._http.post(url, json=payload)
         except httpx.HTTPError as exc:
             raise AIError(f"AI Studio недоступен ({type(exc).__name__}).") from None
+        if response.status_code in (401, 403, 429):
+            raise AILimit(response.status_code)
         if response.status_code != 200:
             raise AIError(f"AI Studio вернул HTTP {response.status_code}.")
         try:
@@ -81,8 +94,19 @@ class YandexAI:
             raise AIError(f"Размерность вектора {size}, ожидается {self.dim}.")
         return [float(x) for x in vector]
 
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        return [self._embed(self.doc_model, text) for text in texts]
+    def embed_documents(self, texts: list[str], *, sleep=time.sleep) -> list[list[float]]:
+        """Векторы документов. Кратковременное ограничение частоты (429) пережидается."""
+        vectors = []
+        for text in texts:
+            for attempt in range(1, LIMIT_ATTEMPTS + 1):
+                try:
+                    vectors.append(self._embed(self.doc_model, text))
+                    break
+                except AILimit as exc:
+                    if exc.status != 429 or attempt == LIMIT_ATTEMPTS:
+                        raise
+                    sleep(LIMIT_DELAY * attempt)
+        return vectors
 
     def embed_query(self, text: str) -> list[float]:
         return self._embed(self.query_model, text)

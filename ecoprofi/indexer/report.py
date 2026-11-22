@@ -4,6 +4,7 @@
 названия, идентификаторы VK, состояния и аудитории.
 """
 from ecoprofi.bot.access import MATERIAL_AUDIENCE
+from ecoprofi.indexer.outcomes import material_outcomes
 from ecoprofi.textkeys import material_key
 
 _KIND = {"video": "запись", "presentation": "презентация", "letter": "письмо", "document": "документ"}
@@ -45,7 +46,7 @@ def build_report(conn) -> str:
         "ORDER BY lecture_id, post_id, material_id").fetchall()
     jobs = conn.execute(
         "SELECT item_type, owner_id, item_id, post_id, state, attempt, failure_reason FROM index_job "
-        "WHERE state IN ('retry', 'failed') OR failure_reason = 'unsupported' "
+        "WHERE state IN ('retry', 'failed', 'permanent') OR failure_reason = 'unsupported' "
         "ORDER BY item_type, owner_id, item_id").fetchall()
 
     def key(m) -> str:
@@ -107,6 +108,24 @@ def build_report(conn) -> str:
     out += _table(["Ключ материала", "Публикация", "Состояние", "Причина", "Попыток"],
                   [[material_key(j["item_type"], j["owner_id"], j["item_id"]), j["post_id"], j["state"],
                     j["failure_reason"], j["attempt"]] for j in jobs]) if jobs else ["Нет.", ""]
+
+    outcomes = material_outcomes(conn)["items"]
+    out += ["## Постоянный сбой", "",
+            "Материал не прочитан в нескольких проходах подряд и автоматически не повторяется. "
+            "Вернуть в очередь: python -m ecoprofi.indexer requeue <ключ>.", ""]
+    out += _table(["Ключ материала", "Публикация", "Причина", "Проходов без успеха"],
+                  [[i["key"], i["post_id"], i["reason"], i["failed_runs"]] for i in outcomes["permanent"]]) \
+        if outcomes["permanent"] else ["Нет.", ""]
+
+    out += ["## Ждут источника", "", "Записи без пригодных субтитров: опубликованы карточкой целиком.", ""]
+    out += _table(["Ключ материала", "Публикация"], [[i["key"], i["post_id"]] for i in outcomes["waiting_source"]]) \
+        if outcomes["waiting_source"] else ["Нет.", ""]
+
+    out += ["## Публикации, пропавшие из ленты", "",
+            "Материалы остаются в поиске до подтверждённого удаления.", ""]
+    missing = conn.execute("SELECT DISTINCT post_id, missed FROM lecture_post WHERE missed > 0 ORDER BY post_id").fetchall()
+    out += _table(["Публикация", "Пропусков подряд"], [[m["post_id"], m["missed"]] for m in missing]) \
+        if missing else ["Нет.", ""]
 
     out += ["## Строки, которых нет в расписании", ""]
     orphaned = [l for l in lectures if l["state"] == "orphaned"]
