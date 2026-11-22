@@ -49,15 +49,62 @@ def resolve_access(conn, group_id: int, peer_id: int, user_id: int) -> Access:
     return Access(group_id, user_id, row["role"], audiences_for(row["role"]))
 
 
-# Общий фильтр обоих видов поиска: только действующие опубликованные материалы
-# с известной аудиторией, разрешённой участнику. Параметр — массив аудиторий.
-VISIBLE_MATERIALS = """
-    SELECT m.id AS material_id, m.published_version_id AS version_id, m.lecture_id,
-           m.title, m.description, m.url, m.owner_id, m.video_id, v.track_state
+# Сигнал расписания для материала m: club, если хотя бы одна его публикация
+# помечена «Клуб» в расписании или принадлежит платной ленте; public — если
+# публикации есть в расписании, ни одна не закрыта и лента каждой проверена;
+# NULL — материал не связан с расписанием либо лента публикации ещё не проверена
+# (тогда действует только решение редактора, как в функции 001).
+SIGNAL_SQL = """
+    SELECT CASE WHEN count(*) = 0 THEN NULL
+                WHEN bool_or(lp.schedule_club OR coalesce(ml.paid_feed, false)) THEN 'club'
+                WHEN bool_or(ml.paid_feed IS NULL) THEN NULL
+                ELSE 'public' END
+    FROM material_link ml
+    JOIN lecture_post lp ON lp.lecture_id = ml.lecture_id AND lp.post_id = ml.post_id
+    WHERE ml.material_id = m.id
+"""
+
+# Действующая аудитория: решение редактора (mp) действует, пока сигнал расписания
+# тот же, что он видел. Иначе — более строгая из двух (unknown > club > public).
+# Без решения действует сигнал; без решения и сигнала материал закрыт (NULL).
+EFFECTIVE_SQL = """
+    CASE WHEN mp.audience IS NULL THEN s.signal
+         WHEN s.signal IS NULL OR mp.seen_signal IS NOT DISTINCT FROM s.signal THEN mp.audience
+         WHEN mp.audience = 'unknown' THEN 'unknown'
+         WHEN 'club' IN (mp.audience, s.signal) THEN 'club'
+         ELSE 'public' END
+"""
+
+# Материалы с решением, сигналом и действующей аудиторией — для поиска и отчёта.
+MATERIAL_AUDIENCE = f"""
+    SELECT m.*, mp.audience AS decision, mp.seen_signal, s.signal, eff.audience
     FROM material m
-    JOIN material_policy mp ON mp.owner_id = m.owner_id AND mp.video_id = m.video_id
+    LEFT JOIN material_policy mp
+           ON mp.item_type = m.item_type AND mp.owner_id = m.owner_id AND mp.item_id = m.item_id
+    LEFT JOIN LATERAL ({SIGNAL_SQL}) s(signal) ON true
+    CROSS JOIN LATERAL (SELECT {EFFECTIVE_SQL} AS audience) eff
+"""
+
+# Общий фильтр обоих видов поиска: только действующие опубликованные материалы,
+# чья действующая аудитория разрешена участнику. Параметр — массив аудиторий.
+# Материал на проверке (review) и удалённый не выдаются никому.
+VISIBLE_MATERIALS = f"""
+    SELECT m.id AS material_id, m.published_version_id AS version_id,
+           m.title, m.description, m.url, m.kind AS material_kind,
+           m.item_type, m.owner_id, m.item_id, m.doc_numbers,
+           m.req_date, m.req_number, m.req_sender, m.req_state,
+           v.text_state, v.pages_total,
+           lk.lecture_id, lk.lecture_title, lk.lecture_date
+    FROM ({MATERIAL_AUDIENCE}) m
     JOIN material_version v ON v.id = m.published_version_id
-    WHERE m.state = 'active' AND mp.audience = ANY(%(audiences)s)
+    LEFT JOIN LATERAL (
+        SELECT l.id AS lecture_id, l.title AS lecture_title, l.lecture_date
+        FROM material_link ml JOIN lecture l ON l.id = ml.lecture_id
+        WHERE ml.material_id = m.id
+        ORDER BY (ml.link_type = 'attachment') DESC, ml.id
+        LIMIT 1
+    ) lk ON true
+    WHERE m.state = 'active' AND m.audience = ANY(%(audiences)s)
 """
 
 

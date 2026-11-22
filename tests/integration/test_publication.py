@@ -10,7 +10,7 @@ NEW_TRACK = ("WEBVTT\n\n00:00:05.000 --> 00:00:09.000\n"
 
 
 def job(stand, video_id=111):
-    return stand.owner.execute("SELECT state, failure_reason, attempt FROM index_job WHERE video_id = %s",
+    return stand.owner.execute("SELECT state, failure_reason, attempt FROM index_job WHERE item_id = %s",
                                (video_id,)).fetchone()
 
 
@@ -24,10 +24,10 @@ def test_repeated_import_creates_no_duplicates(loaded):
 
 def test_card_without_track_is_published_with_absent_track_state(loaded):
     row = loaded.owner.execute(
-        "SELECT v.track_state, (SELECT count(*) FROM episode e WHERE e.version_id = v.id) AS n "
-        "FROM material m JOIN material_version v ON v.id = m.published_version_id WHERE m.video_id = 444"
+        "SELECT v.text_state, (SELECT count(*) FROM fragment e WHERE e.version_id = v.id) AS n "
+        "FROM material m JOIN material_version v ON v.id = m.published_version_id WHERE m.item_id = 444"
     ).fetchone()
-    assert (row["track_state"], row["n"]) == ("absent", 0)
+    assert (row["text_state"], row["n"]) == ("absent", 0)
 
 
 def test_temporary_failure_retries_with_fresh_track_url(loaded):
@@ -85,7 +85,7 @@ def test_failure_statuses_are_distinct(loaded):
 def test_missing_post_does_not_confirm_deletion(loaded):
     loaded.transport.missing_posts.add(RAZBOR_POST)
     loaded.index([RAZBOR_POST])
-    state = loaded.owner.execute("SELECT state FROM material WHERE video_id = 111").fetchone()["state"]
+    state = loaded.owner.execute("SELECT state FROM material WHERE item_id = 111").fetchone()["state"]
     assert state == "active"
     assert "razbor_club" in loaded.keys(loaded.ask("club", CONTROL))
 
@@ -150,7 +150,7 @@ def test_new_version_is_never_partially_visible(loaded):
     loaded.transport.tracks["razbor_club.vtt"] = NEW_TRACK
     loaded.index([RAZBOR_POST])
     orphan = loaded.owner.execute(
-        "SELECT count(*) AS n FROM episode e WHERE NOT EXISTS "
+        "SELECT count(*) AS n FROM fragment e WHERE NOT EXISTS "
         "(SELECT 1 FROM material m WHERE m.published_version_id = e.version_id)").fetchone()["n"]
     assert orphan == 0
 

@@ -10,7 +10,7 @@ def test_control_query_returns_club_review_with_exact_episode(loaded):
     assert "razbor_club" in keys
     card = answer["cards"][keys.index("razbor_club")]
     control = loaded.expectations["subtitles"]["razbor_club.vtt"]["control_episode"]
-    assert set(card) == {"type", "material_id", "title", "explanation", "excerpt", "start_ms", "end_ms", "url"}
+    assert set(card) == {"type", "material_id", "title", "lecture", "explanation", "excerpt", "start_ms", "end_ms", "url"}
     assert card["type"] == "episode"
     assert (card["start_ms"], card["end_ms"]) == (control["start_ms"], control["end_ms"])
     assert card["excerpt"] == control["text"]
@@ -31,7 +31,7 @@ def test_quote_interval_and_link_belong_to_one_version(loaded):
     answer = loaded.ask("club", CONTROL)
     for card in answer["cards"]:
         row = loaded.owner.execute(
-            "SELECT e.text, m.url, m.title FROM episode e "
+            "SELECT e.text, m.url, m.title FROM fragment e "
             "JOIN material m ON m.published_version_id = e.version_id "
             "WHERE m.id = %s AND e.start_ms = %s AND e.end_ms = %s",
             (card["material_id"], card["start_ms"], card["end_ms"]),
@@ -45,7 +45,7 @@ def test_link_start_rounds_down_and_displayed_end_rounds_up(loaded):
     answer = loaded.ask("public", "допустимую концентрацию")
     card = answer["cards"][loaded.keys(answer).index("lecture_public")]
     assert (card["start_ms"], card["end_ms"]) == (720_000, 739_000)
-    loaded.owner.execute("UPDATE episode SET start_ms = 720900, end_ms = 738100 WHERE start_ms = 720000")
+    loaded.owner.execute("UPDATE fragment SET start_ms = 720900, end_ms = 738100 WHERE start_ms = 720000")
     answer = loaded.ask("public", "допустимую концентрацию")
     card = answer["cards"][loaded.keys(answer).index("lecture_public")]
     assert card["url"].endswith("?t=720s")

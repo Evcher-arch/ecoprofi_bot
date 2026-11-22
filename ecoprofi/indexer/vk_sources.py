@@ -7,9 +7,11 @@
 """
 import getpass
 import json
-from dataclasses import dataclass
+import re
+import time
+from dataclasses import dataclass, field
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import unquote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from ecoprofi.indexer.retry import SourceDeleted, SourceDenied, SourceEmpty, SourceParse, SourceTimeout
@@ -27,6 +29,9 @@ CONTROL_SCHEDULE = {
     40746: ("pilot-control", "Контрольная строка расписания пилота"),
 }
 
+WALL_PAUSE = 0.35               # пауза между страницами ленты: лимит запросов VK
+_MENTION = re.compile(r"\b(doc|video)(-?\d+)_(\d+)")
+
 _DENIED = {5, 15, 30, 200, 201, 203, 204, 212, 214}   # авторизация и доступ
 _TEMPORARY = {1, 6, 9, 10, 29}                         # сбой сервера и лимиты
 
@@ -42,10 +47,42 @@ class VideoSource:
     link_type: str
     access_key: str | None
     track_url: str | None
+    paid_feed: bool | None = None      # None — лента публикации не проверялась
 
     @property
     def url(self) -> str:
         return video_url(self.owner_id, self.video_id)
+
+
+@dataclass(frozen=True)
+class DocSource:
+    """Документ-вложение публикации. file_url — временный адрес с ключом доступа:
+    используется только для чтения, не сохраняется и наружу не выдаётся."""
+    post_id: int
+    owner_id: int
+    doc_id: int
+    title: str
+    ext: str
+    link_type: str
+    file_url: str | None
+    paid_feed: bool = False
+
+
+@dataclass
+class PostMaterials:
+    """Материалы одной публикации, найденные за проход по ленте."""
+    post_id: int
+    found: bool = False
+    deleted: bool = False
+    paid_feed: bool = False
+    videos: list = field(default_factory=list)
+    docs: list = field(default_factory=list)
+    mentions: list = field(default_factory=list)   # (тип, владелец, номер) из текста и ссылок
+
+
+def post_url(owner_id: int, post_id: int) -> str:
+    """Стабильная ссылка на публикацию: доступ к ней проверяет сам VK."""
+    return f"https://vk.com/wall{owner_id}_{post_id}"
 
 
 def video_url(owner_id: int, video_id: int) -> str:
@@ -79,11 +116,11 @@ class HttpTransport:
         except ValueError:
             raise SourceParse("Ответ API не является JSON.") from None
 
-    def get(self, url: str) -> bytes:
+    def get(self, url: str, limit: int = MAX_TRACK_BYTES) -> bytes:
         host = urlsplit(url).hostname
         try:
-            with urlopen(url, timeout=25) as response:
-                return response.read(MAX_TRACK_BYTES + 1)
+            with urlopen(url, timeout=60) as response:
+                return response.read(limit + 1)
         except HTTPError as exc:
             exc.close()
             if exc.code >= 500 or exc.code == 429:
@@ -168,6 +205,87 @@ class VkSources:
         if not videos:
             raise SourceEmpty(f"В посте {post_id} нет прямых видеовложений.")
         return videos
+
+    def _wall_pages(self, feed: str, sleep):
+        """Страницы ленты: feed — donut (платная) или owner (открытая)."""
+        offset, total = 0, None
+        while total is None or offset < total:
+            page = self._call("wall.get", owner_id=self.owner_id, count=100, offset=offset, filter=feed)
+            if not isinstance(page, dict):
+                raise SourceParse("wall.get: неожиданный ответ.")
+            items = page.get("items") or []
+            total = page.get("count", 0) if total is None else total
+            if not items:
+                return
+            yield items
+            offset += len(items)
+            sleep(WALL_PAUSE)
+
+    def posts_materials(self, post_ids, *, sleep=time.sleep) -> dict[int, PostMaterials]:
+        """За один проход по платной и открытой ленте найти вложения и упоминания публикаций.
+
+        Публикация, не встретившаяся в лентах, остаётся с found=False: пропуск
+        требует проверки и удаление не подтверждает.
+        """
+        wanted = {int(p): PostMaterials(int(p)) for p in post_ids}
+        for feed in ("donut", "owner"):
+            if all(m.found for m in wanted.values()):
+                break
+            for items in self._wall_pages(feed, sleep):
+                for item in items:
+                    result = wanted.get(item.get("id"))
+                    if result is None or result.found or item.get("owner_id") != self.owner_id:
+                        continue
+                    result.found = True
+                    result.paid_feed = feed == "donut"
+                    if item.get("deleted") or item.get("is_deleted"):
+                        result.deleted = True
+                        continue
+                    self._collect(item, result)
+                if all(m.found for m in wanted.values()):
+                    break
+        return wanted
+
+    def _collect(self, item: dict, result: PostMaterials) -> None:
+        texts, attached = [item.get("text") or ""], set()
+        for attachment in item.get("attachments", []):
+            kind = attachment.get("type")
+            obj = attachment.get(kind) or {}
+            if kind == "link":
+                texts.append(obj.get("url") or "")
+            if kind not in ("doc", "video") or "owner_id" not in obj or "id" not in obj:
+                continue
+            attached.add((kind, obj["owner_id"], obj["id"]))
+            if kind == "video":
+                result.videos.append(VideoSource(
+                    post_id=result.post_id, owner_id=obj["owner_id"], video_id=obj["id"],
+                    title=(obj.get("title") or "").strip() or f"Видео {obj['owner_id']}_{obj['id']}",
+                    description=(obj.get("description") or "").strip(), link_type="attachment",
+                    access_key=obj.get("access_key"), track_url=_track_url(obj), paid_feed=result.paid_feed,
+                ))
+            else:
+                url = obj.get("url")
+                result.docs.append(DocSource(
+                    post_id=result.post_id, owner_id=obj["owner_id"], doc_id=obj["id"],
+                    title=(obj.get("title") or "").strip() or f"Документ {obj['owner_id']}_{obj['id']}",
+                    ext=(obj.get("ext") or "").lower(), link_type="attachment",
+                    file_url=url if isinstance(url, str) and url.startswith("https://") else None,
+                    paid_feed=result.paid_feed,
+                ))
+        for text in texts:
+            for kind, owner, number in _MENTION.findall(unquote(text)):
+                ref = (kind, int(owner), int(number))
+                if ref not in attached and ref not in result.mentions:
+                    result.mentions.append(ref)
+
+    def read_document(self, source: DocSource, limit: int) -> bytes:
+        """Прочитать файл документа в память. Адрес с ключом нигде не сохраняется."""
+        if not source.file_url:
+            raise SourceEmpty("У вложения нет адреса файла.")
+        raw = self._transport.get(source.file_url, limit)
+        if len(raw) > limit:
+            raise SourceParse("Документ превышает допустимый размер.")
+        return raw
 
     def fresh_track_url(self, source: VideoSource) -> str | None:
         """Запросить карточку заново и вернуть свежий адрес дорожки (или None)."""

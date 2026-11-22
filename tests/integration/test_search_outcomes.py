@@ -42,7 +42,7 @@ def test_off_corpus_question_returns_no_quotes_or_timecodes(loaded):
 def test_card_without_track_is_navigation_only(loaded):
     answer = loaded.ask("public", "паспортизация отходов")
     (card,) = answer["cards"]
-    assert set(card) == {"type", "material_id", "title", "explanation", "url"}
+    assert set(card) == {"type", "material_id", "title", "lecture", "explanation", "url"}
     assert card["type"] == "navigation"
     assert card["url"] == "https://vkvideo.ru/video-100001_444"
     assert "недоступен" in card["explanation"]
@@ -51,7 +51,7 @@ def test_card_without_track_is_navigation_only(loaded):
 
 def test_navigation_card_counts_towards_limit_of_three(loaded):
     loaded.owner.execute(
-        "UPDATE material SET description = description || ' Перечень загрязняющих веществ.' WHERE video_id = 444")
+        "UPDATE material SET description = description || ' Перечень загрязняющих веществ.' WHERE item_id = 444")
     answer = loaded.ask("club", "загрязняющих веществ")
     assert len(answer["cards"]) == 3
 

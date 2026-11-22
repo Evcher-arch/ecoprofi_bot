@@ -16,3 +16,11 @@ def test_secrets_and_temporary_urls_are_removed():
         "nested": [{"episodes": 3}],
         "materials": [1, 2],
     }
+
+
+def test_publication_link_is_kept_and_file_address_is_removed():
+    from ecoprofi.telemetry import sanitize
+
+    clean = sanitize({"url": "https://vk.com/wall-95098598_41120",
+                      "note": "файл https://vk.com/doc1_2?hash=abc&dl=1 прочитан", "file_token": "abc"})
+    assert clean == {"url": "https://vk.com/wall-95098598_41120", "note": "файл [url] прочитан"}

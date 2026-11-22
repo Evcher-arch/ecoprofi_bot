@@ -1,11 +1,21 @@
-# Стенд первого серверного сценария (specs/001-find-lecture-episode).
+# Стенд пилота (specs/001-find-lecture-episode, specs/002-slides-letters-schedule).
 # Секреты берутся из .env (образец — .env.example) и передаются только тому
 # сервису, которому они нужны.
 name: ecoprofi
 
 x-app: &app
-  build: .
+  build:
+    context: .
+    target: app
   image: ecoprofi-app:local
+  networks: [internal]
+
+# Образ индексатора: чтение документов и распознавание (Tesseract, русская модель).
+x-indexer: &indexer
+  build:
+    context: .
+    target: indexer
+  image: ecoprofi-indexer:local
   networks: [internal]
 
 services:
@@ -59,7 +69,7 @@ services:
   # Одноразовый проход: docker compose run --rm indexer python -m ecoprofi.indexer ...
   # Токен оператора вводится в скрытое приглашение и в окружение не попадает.
   indexer:
-    <<: *app
+    <<: *indexer
     profiles: [indexer]
     command: ["python", "-m", "ecoprofi.indexer"]
     environment:
@@ -94,7 +104,7 @@ services:
     networks: [internal]
 
   tests:
-    <<: *app
+    <<: *indexer
     profiles: [test]
     command: ["pytest"]
     environment:

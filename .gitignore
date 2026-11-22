@@ -22,3 +22,7 @@ Thumbs.db
 *.tmp
 *.swp
 *.log
+
+# Расписание и отчёты индексатора (функция 002)
+schedule.html
+out/

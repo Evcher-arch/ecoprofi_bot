@@ -20,3 +20,5 @@ venv/
 Dockerfile*
 .dockerignore
 compose.yaml
+schedule.html
+out/

@@ -16,7 +16,7 @@ log = logging.getLogger("ecoprofi.telemetry")
 _SECRET_KEYS = re.compile(r"(^|_)(token|secret|password|key|authorization|verifier|redirect\w*|callback\w*|"
                           r"track_url|sign\w*)$", re.I)
 _URL = re.compile(r"https?://\S+")
-_STABLE_URL = re.compile(r"^https://vkvideo\.ru/video-?\d+_\d+(\?t=\d+s)?$")
+_STABLE_URL = re.compile(r"^https://(vkvideo\.ru/video-?\d+_\d+(\?t=\d+s)?|vk\.com/wall-?\d+_\d+)$")
 
 
 def new_operation_id() -> str:
@@ -24,7 +24,7 @@ def new_operation_id() -> str:
 
 
 def _clean_text(value: str) -> str:
-    # Сохраняются только стабильные ссылки на записи; прочие адреса вырезаются.
+    # Сохраняются только стабильные ссылки на записи и публикации; прочие адреса вырезаются.
     return _URL.sub(lambda m: m.group(0) if _STABLE_URL.match(m.group(0)) else "[url]", value)
 
 

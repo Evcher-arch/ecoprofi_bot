@@ -19,7 +19,7 @@ def test_schema_rejects_invalid_coordinates_and_roles(loaded):
     vector = "[" + ",".join(["0.1"] * 256) + "]"
     for start, end in ((-1, 5), (5, 5), (9, 3)):
         with pytest.raises(psycopg.errors.CheckViolation):
-            loaded.owner.execute("INSERT INTO episode (version_id, start_ms, end_ms, text, embedding) "
+            loaded.owner.execute("INSERT INTO fragment (version_id, start_ms, end_ms, text, embedding) "
                                  "VALUES (%s, %s, %s, 'x', %s::vector)", (version, start, end, vector))
     with pytest.raises(psycopg.errors.CheckViolation):
         loaded.owner.execute("INSERT INTO participant (group_id, vk_id, tester, role) VALUES (%s, 1, true, 'admin')",

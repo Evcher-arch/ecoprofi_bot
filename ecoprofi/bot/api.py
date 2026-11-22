@@ -51,7 +51,7 @@ def answer(conn, ai, request: SearchRequest) -> dict:
     state = events.register(conn, request.group_id, request.event_id, request.peer_id,
                             request.user_id, request.text)
 
-    outcome, cards, tokens = "empty", [], 0
+    outcome, cards, tokens, options = "empty", [], 0, ()
     search_ms = generation_ms = 0
     versions: dict[int, int] = {}
     for _ in range(MAX_RECHECKS):
@@ -71,10 +71,11 @@ def answer(conn, ai, request: SearchRequest) -> dict:
         versions = {c.material_id: c.version_id for c in decision.cards}
         if current.audiences == access.audiences and all(visible.get(m) == v for m, v in versions.items()):
             outcome, cards = decision.outcome, cards_module.build_cards(decision.cards, explained)
+            options = decision.options
             break
     else:
         # Данные менялись при каждой попытке: безопасный отказ без карточек.
-        outcome, cards, versions = "empty", [], {}
+        outcome, cards, versions, options = "empty", [], {}, ()
 
     if state.first:
         events.update_context(conn, request.group_id, request.peer_id, request.user_id,
@@ -88,13 +89,13 @@ def answer(conn, ai, request: SearchRequest) -> dict:
         )
     return {
         "event_id": request.event_id, "peer_id": request.peer_id, "outcome": outcome,
-        "text": cards_module.message_text(outcome, cards), "cards": cards,
+        "text": cards_module.message_text(outcome, cards, options), "cards": cards,
         "random_id": state.random_id, "operation_id": operation_id,
     }
 
 
 def create_app(*, connect_fn=None, ai=None, service_key: str | None = None) -> FastAPI:
-    app = FastAPI(title="Экопрофи: поиск эпизода лекции", docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="Экопрофи: поиск материалов лекций", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.connect = connect_fn or connect
     app.state.ai = ai
 
