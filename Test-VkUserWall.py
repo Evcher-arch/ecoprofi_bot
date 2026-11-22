@@ -401,6 +401,75 @@ def search_loop(corpus):
             print(f"https://vkvideo.ru/video{ref}?t={t}s")
 
 
+_SHOWN = ("expires_in", "token_type", "scope", "refresh_token_expires_in", "error", "error_description")
+_SECRET = ("access_token", "refresh_token", "id_token")
+
+
+def describe_token(label, token):
+    """Показать состав ответа VK ID. Значения токенов и личные данные на экран не выводятся."""
+    print(f"\n{label}:")
+    for key in sorted(token):
+        value = token[key]
+        if key in _SECRET:
+            print(f"  {key}: есть, длина {len(str(value))}" if value else f"  {key}: пусто")
+        elif key in _SHOWN:
+            print(f"  {key}: {value}")
+        else:
+            print(f"  {key}: есть")
+    for key in _SECRET[:2]:
+        if key not in token:
+            print(f"  {key}: НЕТ В ОТВЕТЕ")
+
+
+def wall_access(access_token):
+    """Работает ли токен для чтения платной ленты сообщества."""
+    result = post("https://api.vk.com/method/wall.get", dict(
+        owner_id=-95098598, count=1, filter="donut", access_token=access_token, v="5.199"))
+    if "error" in result:
+        err = result["error"]
+        return f"VK {err.get('error_code')} | {err.get('error_msg')}"
+    return f"работает (постов в платной ленте: {result['response']['count']})"
+
+
+def probe_refresh(app, device_id, token):
+    """Проба OPS-01: выдаёт ли VK ID токен обновления и можно ли продлить доступ без входа.
+
+    Токены держатся только в памяти процесса и на экран не выводятся. Обновление
+    заменяет токен обновления новым; после пробы полученные токены нигде не остаются.
+    """
+    describe_token("Ответ на вход (обмен кода)", token)
+    print(f"  чтение платной ленты: {wall_access(token['access_token'])}")
+    if not token.get("refresh_token"):
+        print("\nИТОГ: токен обновления не выдан. Продление без входа оператора невозможно.")
+        return
+    current, access = token["refresh_token"], token["access_token"]
+    for step in (1, 2):
+        state = secrets.token_urlsafe(32)
+        try:
+            renewed = post(TOKEN_URL, dict(grant_type="refresh_token", refresh_token=current,
+                                           client_id=app, device_id=device_id, state=state))
+        except ValueError as exc:
+            print(f"\nОбновление {step}: отказ | {exc}")
+            print("ИТОГ: токен обновления выдан, но обновление не удалось.")
+            return
+        describe_token(f"Обновление {step}", renewed)
+        if not renewed.get("access_token"):
+            print("ИТОГ: токен обновления выдан, но обновление не вернуло рабочий токен.")
+            return
+        if "state" in renewed:
+            print(f"  state совпал: {'да' if renewed['state'] == state else 'НЕТ'}")
+        print(f"  рабочий токен новый: {'да' if renewed['access_token'] != access else 'нет, тот же'}")
+        rotated = renewed.get("refresh_token")
+        print("  токен обновления: " + ("заменён новым" if rotated and rotated != current
+                                         else "тот же" if rotated else "в ответе нет, действует прежний"))
+        print(f"  чтение платной ленты новым токеном: {wall_access(renewed['access_token'])}")
+        if step == 1:
+            print(f"  чтение платной ленты прежним токеном: {wall_access(access)}")
+        access, current = renewed["access_token"], rotated or current
+    print("\nИТОГ: токен обновления выдан, два обновления подряд прошли без входа оператора.")
+    print("Срок жизни самого токена обновления проба не измеряет: его покажет только время.")
+
+
 def main():
     app = input("Numeric VK ID application ID: ").strip()
     if not re.fullmatch(r"[0-9]+", app):
@@ -417,6 +486,9 @@ def main():
     if not token.get("access_token"):
         raise ValueError("VK ID token exchange failed: " + str(token.get("error", "missing access token")))
     print("VK ID: OK")
+    if sys.argv[1:] == ["--probe-refresh"]:
+        probe_refresh(app, fields["device_id"], token)
+        return
     if sys.argv[1:] == ["--copy-token"]:
         # Передача токена индексатору: в буфер обмена, без вывода на экран и в журнал.
         subprocess.run(["clip.exe"], input=token["access_token"].encode("ascii"), check=True)
