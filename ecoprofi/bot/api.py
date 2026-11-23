@@ -17,9 +17,9 @@ from ecoprofi.bot import cards as cards_module
 from ecoprofi.bot import events
 from ecoprofi.bot.access import (Forbidden, NotSubscribed, Unauthorized, check_service_key, resolve_access,
                                  visible_versions)
-from ecoprofi.bot.club import ClubMembers, ClubUnavailable
-from ecoprofi.bot.outcomes import decide
-from ecoprofi.bot.search import find_candidates
+from ecoprofi.bot.club import ClubUnavailable
+from ecoprofi.bot.runtime import BotRuntime
+from ecoprofi.bot.service import search_answer
 from ecoprofi.db import connect
 
 MAX_RECHECKS = 3
@@ -99,28 +99,26 @@ def answer(conn, ai, request: SearchRequest, is_member) -> dict:
     outcome, cards, tokens, options = "empty", [], 0, ()
     search_ms = generation_ms = 0
     versions: dict[int, int] = {}
-    for _ in range(MAX_RECHECKS):
-        # Права читаются заново при каждом проходе, включая уточнения и повторы.
-        access = resolve_access(conn, request.group_id, request.peer_id, request.user_id, is_member)
-        mark = time.monotonic()
-        decision = decide(find_candidates(conn, ai, state.effective_query, access.audiences))
-        search_ms = round((time.monotonic() - mark) * 1000)
-
-        mark = time.monotonic()
-        explained, tokens = cards_module.explanations(ai, state.effective_query, decision.cards)
-        generation_ms = round((time.monotonic() - mark) * 1000)
-
-        # Перед возвратом: права и опубликованные версии не изменились за время обработки.
-        current = resolve_access(conn, request.group_id, request.peer_id, request.user_id, is_member)
-        visible = visible_versions(conn, current.audiences)
-        versions = {c.material_id: c.version_id for c in decision.cards}
-        if current.audiences == access.audiences and all(visible.get(m) == v for m, v in versions.items()):
-            outcome, cards = decision.outcome, cards_module.build_cards(decision.cards, explained)
-            options = decision.options
-            break
+    if state.first:
+        found = search_answer(
+            conn, ai, state.effective_query,
+            lambda: resolve_access(conn, request.group_id, request.peer_id, request.user_id, is_member),
+        )
+        outcome, cards, versions = found.outcome, found.cards, found.provenance
+        tokens = found.metrics["tokens"]
+        search_ms = found.metrics["search_ms"]
+        generation_ms = found.metrics["generation_ms"]
+        events.update_context(conn, request.group_id, request.peer_id, request.user_id,
+                              outcome, state.effective_query)
     else:
-        # Данные менялись при каждой попытке: безопасный отказ без карточек.
-        outcome, cards, versions, options = "empty", [], {}, ()
+        found = search_answer(
+            conn, ai, state.effective_query,
+            lambda: resolve_access(conn, request.group_id, request.peer_id, request.user_id, is_member),
+        )
+        outcome, cards, versions = found.outcome, found.cards, found.provenance
+        tokens = found.metrics["tokens"]
+        search_ms = found.metrics["search_ms"]
+        generation_ms = found.metrics["generation_ms"]
 
     if state.first:
         events.update_context(conn, request.group_id, request.peer_id, request.user_id,
@@ -139,10 +137,28 @@ def answer(conn, ai, request: SearchRequest, is_member) -> dict:
     }
 
 
-def create_app(*, connect_fn=None, ai=None, service_key: str | None = None, club=None) -> FastAPI:
-    app = FastAPI(title="Экопрофи: поиск материалов лекций", docs_url=None, redoc_url=None, openapi_url=None)
+def create_app(*, connect_fn=None, ai=None, service_key: str | None = None, club=None, miniapp: bool = False,
+               miniapp_worker: bool = True) -> FastAPI:
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def lifespan(app):
+        # Один процесс uvicorn: worker и обслуживание Mini App запускаются только при полной настройке.
+        services = getattr(app.state, "miniapp_services", [])
+        for service in services:
+            service.start()
+        try:
+            yield
+        finally:
+            for service in reversed(services):
+                service.stop()
+
+    app = FastAPI(title="Экопрофи: поиск материалов лекций", docs_url=None, redoc_url=None, openapi_url=None,
+                  lifespan=lifespan)
+    app.state.miniapp_services = []
     app.state.connect = connect_fn or connect
     app.state.ai = ai
+    app.state.runtime = BotRuntime(connect_fn=app.state.connect, club=club)
     app.state.club = club
 
     def get_ai():
@@ -151,32 +167,36 @@ def create_app(*, connect_fn=None, ai=None, service_key: str | None = None, club
         return app.state.ai
 
     def get_club():
-        if app.state.club is None:
-            app.state.club = ClubMembers.from_env()
-        return app.state.club
-
-    # None — неизвестно, открыта ли причина «club»: первая удачная проверка закроет её, если была.
-    app.state.club_alert = None
+        return app.state.runtime.get_club()
 
     def club_alert(opened: bool) -> None:
-        """Сбой проверки подписки закрывает поиск всем: оператор узнаёт из оповещения (FR-24)."""
-        if app.state.club_alert is opened:
-            return
-        try:
-            with app.state.connect() as conn:
-                if opened:
-                    alert_causes.open_alert(conn, "club", alert_causes.text_club())
-                else:
-                    alert_causes.close_alert(conn, "club")
-            app.state.club_alert = opened
-        except Exception as exc:     # оповещение вспомогательное: ответ участнику не зависит от него
-            logging.getLogger("ecoprofi.bot").warning("оповещение club не записано (%s)", type(exc).__name__)
+        app.state.runtime.club_alert(opened)
 
     def service_key_checked(x_service_key: str | None = Header(default=None)):
         try:
             check_service_key(x_service_key, service_key)
         except Unauthorized:
             raise HTTPException(status_code=401, detail="Неверный служебный ключ.") from None
+
+    if miniapp:
+        from ecoprofi.bot.miniapp.config import MiniAppConfig
+        from ecoprofi.bot.miniapp.repository import MiniAppRepository
+        from ecoprofi.bot.miniapp.api import build_router, miniapp_middleware, register_exception_handlers
+        config = MiniAppConfig.from_env()
+        if config.enabled:
+            repository = MiniAppRepository(app.state.connect, club=get_club(), alert=club_alert)
+            app.state.miniapp = repository
+            app.middleware("http")(miniapp_middleware(config))
+            register_exception_handlers(app, config, repository)
+            app.include_router(build_router(config, repository))
+            if miniapp_worker:
+                from ecoprofi.bot.miniapp.worker import Maintenance, MiniAppWorker
+
+                class _LazyAI:
+                    def __getattr__(self, name):
+                        return getattr(get_ai(), name)
+
+                app.state.miniapp_services = [Maintenance(repository), MiniAppWorker(repository, _LazyAI())]
 
     @app.get("/health")
     def health():
@@ -228,4 +248,4 @@ def create_app(*, connect_fn=None, ai=None, service_key: str | None = None, club
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-app = create_app()
+app = create_app(miniapp=True)   # маршруты Mini App открываются только при MINIAPP_ENABLED и полных настройках

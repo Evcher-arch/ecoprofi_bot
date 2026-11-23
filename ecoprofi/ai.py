@@ -71,9 +71,18 @@ class YandexAI:
             completion_model=env("YANDEX_COMPLETION_MODEL", ""), **kwargs,
         )
 
+    def with_timeout(self, seconds: float) -> "YandexAI":
+        """Копия клиента с тайм-аутом сетевой стадии (бюджет Mini App); общий клиент не меняется."""
+        import copy
+        clone = copy.copy(self)
+        clone._timeout_override = max(0.1, seconds)
+        return clone
+
     def _post(self, url: str, payload: dict) -> dict:
         try:
-            response = self._http.post(url, json=payload)
+            timeout = getattr(self, "_timeout_override", None)
+            response = (self._http.post(url, json=payload, timeout=timeout) if timeout
+                        else self._http.post(url, json=payload))
         except httpx.HTTPError as exc:
             raise AIError(f"AI Studio недоступен ({type(exc).__name__}).") from None
         if response.status_code in (401, 403, 429):

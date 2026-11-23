@@ -32,3 +32,23 @@ COPY tests ./tests
 RUN mkdir /secrets && chown ecoprofi:ecoprofi /secrets && chmod 700 /secrets
 USER ecoprofi
 CMD ["python", "-c", "print('Укажите команду сервиса в compose.yaml')"]
+
+
+FROM node:24.14.1-bookworm-slim AS miniapp-build
+WORKDIR /build
+COPY mini-app/package.json mini-app/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY mini-app/ ./
+RUN npm run build
+
+
+FROM nginx:1.29.3-alpine AS miniapp-gateway
+COPY deploy/miniapp-nginx.conf /etc/nginx/conf.d/default.conf
+COPY deploy/miniapp-server.inc /etc/nginx/conf.d/miniapp-server.inc
+COPY deploy/miniapp-realip.inc /etc/nginx/conf.d/miniapp-realip.inc
+COPY deploy/miniapp-proxy.inc /etc/nginx/conf.d/miniapp-proxy.inc
+COPY --from=miniapp-build /build/dist /usr/share/nginx/html
+# Каталоги для монтирования TLS-блока и сертификата Cloudflare Origin CA.
+# Пустой conf.d/tls означает «только локальный 8080» (см. deploy/miniapp-nginx.conf).
+RUN mkdir -p /etc/nginx/conf.d/tls /etc/nginx/certs
+EXPOSE 8080 443

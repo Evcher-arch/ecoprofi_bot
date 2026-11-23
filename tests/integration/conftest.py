@@ -29,7 +29,8 @@ from tests.fixtures.fake_vkid import FakeClock, FakeVkId, callback
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 SERVICE_KEY = "test-service-key"
 OWNER_ID = -100001
-TABLES = ("operation_log, index_job, event, dialog_context, participant, test_group, "
+TABLES = ("miniapp_session, miniapp_dialog, miniapp_request, "
+          "operation_log, index_job, event, dialog_context, participant, test_group, "
           "fragment, material_link, lecture_post, pilot_lecture, requisite_decision, "
           "material_version, material, material_policy, run_lecture, index_run, alert, lecture")
 RESET = ("UPDATE operator_access SET state = 'absent', logged_in_at = NULL, refreshed_at = NULL, "
@@ -149,10 +150,11 @@ class FakeClub:
 class Stand:
     """Всё, что нужно сценарию: соединения, подмены, загрузка и запросы."""
 
-    def __init__(self, owner, indexer_dsn, bot_dsn):
+    def __init__(self, owner, indexer_dsn, bot_dsn, *, miniapp=False):
         self.owner = owner
         self.indexer_dsn = indexer_dsn
         self.bot_dsn = bot_dsn
+        self.miniapp = miniapp
         self.ai = FakeAI()
         self.transport = FakeVkTransport()
         self.corpus = json.loads((FIXTURES / "corpus.json").read_text(encoding="utf-8"))
@@ -166,7 +168,8 @@ class Stand:
         self.outsider = next(p["vk_id"] for p in self.corpus["participants"] if not p["tester"])
         self.club = FakeClub({self.users["club"]})
         self.client = TestClient(create_app(
-            connect_fn=lambda: connect(bot_dsn), ai=self.ai, service_key=SERVICE_KEY, club=self.club))
+            connect_fn=lambda: connect(bot_dsn), ai=self.ai, service_key=SERVICE_KEY, club=self.club,
+            miniapp=miniapp))
         self._events = itertools.count(1)
 
     # --- политика ---
@@ -348,6 +351,14 @@ def stand(owner_conn):
 def loaded(stand):
     stand.load()
     return stand
+
+
+@pytest.fixture
+def miniapp(stand):
+    from tests.fixtures.miniapp import MiniAppStand
+    context = MiniAppStand(stand)
+    yield context
+    context.close()
 
 
 @pytest.fixture

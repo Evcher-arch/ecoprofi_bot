@@ -54,6 +54,15 @@ def resolve_access(conn, group_id: int, peer_id: int, user_id: int, is_member: C
     return Access(group_id, user_id, "club", CLUB_AUDIENCES)
 
 
+def resolve_member_access(user_id: int, is_member: Callable[[int], bool], *, group_id: int = 0) -> Access:
+    """Общий допуск подтверждённого участника без транспортных group/peer ID."""
+    if user_id <= 0:
+        raise Forbidden("Некорректный участник.")
+    if not is_member(user_id):
+        raise NotSubscribed("Поиск доступен подписчикам клуба Экопрофи.")
+    return Access(group_id, user_id, "club", CLUB_AUDIENCES)
+
+
 # Сигнал расписания для материала m: club, если хотя бы одна его публикация
 # помечена «Клуб» в расписании или принадлежит платной ленте; public — если
 # публикации есть в расписании, ни одна не закрыта и лента каждой проверена;

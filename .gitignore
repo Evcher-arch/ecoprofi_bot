@@ -29,3 +29,14 @@ out/
 
 # Временные файлы открытых документов Office
 ~$*
+
+# Frontend и изолированная проба Mini App (004)
+node_modules/
+mini-app/dist/
+mini-app/test-results/
+mini-app/playwright-report/
+tools/miniapp-probe/dist/
+tools/miniapp-probe/test-results/
+
+# Сертификат и ключ публичного входа Mini App (Cloudflare Origin CA)
+deploy/certs/

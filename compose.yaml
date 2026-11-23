@@ -58,7 +58,7 @@ services:
 
   bot:
     <<: *app
-    command: ["uvicorn", "ecoprofi.bot.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["uvicorn", "ecoprofi.bot.api:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
     environment:
       DATABASE_URL: postgresql://ecoprofi_bot:${BOT_DB_PASSWORD}@db:5432/ecoprofi
       # Роль владельца схемы нужна только командам migrate и import_policy.
@@ -77,9 +77,35 @@ services:
       CLUB_EXEMPT_IDS: ${CLUB_EXEMPT_IDS:-}
       # Ссылка на оформление подписки в ответе неподписчику; без значения — только текст.
       CLUB_URL: ${CLUB_URL:-}
+      MINIAPP_ENABLED: ${MINIAPP_ENABLED:-false}
+      MINIAPP_APP_ID: ${MINIAPP_APP_ID:-}
+      MINIAPP_APP_SECRET: ${MINIAPP_APP_SECRET:-}
+      MINIAPP_PUBLIC_ORIGIN: ${MINIAPP_PUBLIC_ORIGIN:-}
     depends_on:
       db:
         condition: service_healthy
+    restart: unless-stopped
+
+  miniapp-gateway:
+    build:
+      context: .
+      target: miniapp-gateway
+    image: ecoprofi-miniapp-gateway:local
+    profiles: [miniapp]
+    ports:
+      # Публичный HTTPS-вход за проксируемой A-записью Cloudflare: NAT 443 → этот порт.
+      # Входящий 443 ограничить диапазонами Cloudflare (deploy/miniapp-realip.inc).
+      - "443:443"
+      # Локальная диагностика шлюза; наружу не публикуется.
+      - "127.0.0.1:8080:8080"
+    volumes:
+      # TLS-блок и сертификат Cloudflare Origin CA; без них шлюз работает только на 8080.
+      - ./deploy/miniapp-tls.conf:/etc/nginx/conf.d/tls/miniapp-tls.conf:ro
+      - ./deploy/certs:/etc/nginx/certs:ro
+    environment:
+      MINIAPP_PUBLIC_ORIGIN: ${MINIAPP_PUBLIC_ORIGIN:-}
+    depends_on: [bot]
+    networks: [internal]
     restart: unless-stopped
 
   vk-adapter:
