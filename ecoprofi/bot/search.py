@@ -58,6 +58,7 @@ class SearchResult:
     cards: tuple[Candidate, ...]        # записи без дорожки, совпавшие по описанию
     numbered: tuple[Candidate, ...] = ()   # материалы, найденные по номеру документа
     numbers: tuple[str, ...] = ()
+    catalog: tuple[Candidate, ...] = ()  # подтверждены названием, без координат фрагмента
 
 
 def query_lexemes(conn, text: str) -> tuple[str, ...]:
@@ -128,6 +129,28 @@ WHERE vis.doc_numbers && %(numbers)s::text[]
 ORDER BY vis.lecture_date NULLS LAST, vis.material_id
 """
 
+# Считаем совпадения отдельно для названия лекции и вложения: слова из
+# разных заголовков не образуют фразу. AND-запрос для ts_rank_cd учитывает
+# расстояние между совпавшими лексемами в исходном заголовке.
+_CATALOG = f"""
+WITH vis AS ({VISIBLE_MATERIALS})
+SELECT {_VIS_COLUMNS}, hit.matched, hit.proximity
+FROM vis
+CROSS JOIN LATERAL (
+    SELECT matches.matched, ts_rank_cd(t.tsv, to_tsquery('simple', matches.conjunction), 32) AS proximity
+    FROM (VALUES (to_tsvector('russian', coalesce(vis.lecture_title, ''))),
+                 (to_tsvector('russian', vis.title))) AS t(tsv)
+    CROSS JOIN LATERAL (
+        SELECT count(*) AS matched, string_agg(quote_literal(word), ' & ') AS conjunction
+        FROM unnest(%(lexemes)s::text[]) AS terms(word)
+        WHERE word = ANY(tsvector_to_array(t.tsv))
+    ) matches
+    WHERE matches.matched >= 2
+    ORDER BY matched DESC, proximity DESC LIMIT 1
+) hit
+ORDER BY hit.matched DESC, hit.proximity DESC, vis.material_id
+"""
+
 
 def _material_fields(row, numbers) -> dict:
     return dict(
@@ -171,7 +194,16 @@ def find_candidates(conn, ai, question: str, audiences: tuple[str, ...]) -> Sear
             Candidate(kind="material", score=0.0, coverage=1.0, similarity=0.0, **_material_fields(r, numbers))
             for r in conn.execute(_NUMBERED, {"audiences": list(audiences), "numbers": list(numbers)}).fetchall()
         )
-    return SearchResult(lexemes, fragments, cards, numbered, numbers)
+    catalog = ()
+    if len(lexemes) >= 2:
+        # Максимальный ранг двух каналов RRF равен 2/(k+1).
+        catalog = tuple(
+            Candidate(kind="material", coverage=r["matched"] / total, similarity=0.0,
+                      score=2 / (RRF_K + 1) * (r["matched"] / total) * (1 + r["proximity"]),
+                      **_material_fields(r, numbers))
+            for r in conn.execute(_CATALOG, params).fetchall()
+        )
+    return SearchResult(lexemes, fragments, cards, numbered, numbers, catalog)
 
 
 def best_per_material(candidates, limit: int | None = None) -> list[Candidate]:

@@ -85,7 +85,8 @@ def build_cards(candidates, explained: dict[int, str]) -> list[dict]:
         elif c.kind == "document":
             card.update(excerpt=c.text)
         elif c.kind == "material":
-            card.update(explanation=MATERIAL_EXPLANATION, material_kind=c.material_kind)
+            reason = MATERIAL_EXPLANATION if c.by_number else "Совпадение по названию лекции или вложения."
+            card.update(explanation=reason, material_kind=c.material_kind)
         else:
             card.update(explanation=NAVIGATION_EXPLANATION)
         cards.append(card)

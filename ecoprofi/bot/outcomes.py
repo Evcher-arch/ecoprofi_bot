@@ -8,7 +8,7 @@
 SEARCH_SIM_WEAK, по умолчанию выключены).
 """
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ecoprofi.bot.search import Candidate, SearchResult, best_per_material
 
@@ -93,26 +93,32 @@ def decide(result: SearchResult) -> Decision:
 
     strong = [c for c in result.episodes if c.coverage >= MIN_COVERAGE or c.similarity >= sim_strong]
     fragments = best_per_material(strong)
+    catalog = {c.material_id: c for c in result.catalog}
+    fragments = [replace(c, score=c.score + catalog[c.material_id].score)
+                 if c.material_id in catalog else c for c in fragments]
     taken = {c.material_id for c in fragments}
     # Материал, найденный по номеру документа, без подтверждённого места в тексте
     # выдаётся целиком: без страницы, реквизитов и выдержки.
     numbered = [c for c in result.numbered if c.material_id not in taken]
     taken |= {c.material_id for c in numbered}
+    titles = [c for c in result.catalog if c.coverage >= MIN_COVERAGE and c.material_id not in taken]
+    taken.update(c.material_id for c in titles)
     # Запись без дорожки предлагается только для навигации и входит в общий лимит.
     navigation = [c for c in result.cards if c.coverage >= MIN_COVERAGE and c.material_id not in taken]
 
     # Сначала материалы, чей номер назван в вопросе, затем остальные подтверждённые.
-    ordered = ([c for c in fragments if c.by_number] + numbered
-               + [c for c in fragments if not c.by_number] + navigation)
+    ranked = sorted([c for c in fragments if not c.by_number] + titles,
+                    key=lambda c: c.score, reverse=True)
+    ordered = [c for c in fragments if c.by_number] + numbered + ranked + navigation
     if ordered:
         if not result.numbered:
             # Одно слово, подходящее сразу нескольким материалам, не определяет тему.
             if len(result.lexemes) == 1 and len(ordered) > 1:
                 return Decision("clarify")
-            options = _too_many_close_lectures(fragments, _threshold("SEARCH_LECTURE_CLOSE", LECTURE_CLOSE))
+            options = _too_many_close_lectures(ranked, _threshold("SEARCH_LECTURE_CLOSE", LECTURE_CLOSE))
             if options:
                 return Decision("clarify", options=options)
         return Decision("found", tuple(_cap_per_lecture(ordered)))
 
     weak = any(c.coverage > 0 or c.similarity >= sim_weak for c in result.episodes) or bool(result.cards)
-    return Decision("clarify" if weak else "empty")
+    return Decision("clarify" if weak or result.catalog else "empty")
