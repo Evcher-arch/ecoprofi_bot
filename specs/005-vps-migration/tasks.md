@@ -6,7 +6,7 @@ description: "Задачи 005: перенос стенда на VPS"
 
 **Вход:** [spec.md](spec.md), [plan.md](plan.md), [research.md](research.md), [data-model.md](data-model.md), [contracts/](contracts/), [quickstart.md](quickstart.md).
 
-**Дата:** 2026-11-24 (перестроено по plan.md, нумерация изменена). **Статус:** 9/55. Подготовка репозитория T001–T005 и скрипты оповещений хоста T041–T044 выполнены (2026-11-24). Для T045 осталось: коммит и push, `git pull` на VPS. SQL `host-alert.sh` проверяется на VPS в T047: на ПК нет Docker и Postgres. `nginx -t` и запуск оверлея проверяются на VPS в T020: на ПК разработки Docker не установлен.
+**Дата:** 2026-11-24 (перестроено по plan.md, нумерация изменена). **Статус:** 10/55. Выполнены 2026-11-24: Setup T001–T006 (потребление ПК записано в acceptance.md, тариф 4/8/80 подтверждён) и скрипты оповещений хоста T041–T044. По T045 коммит и push сделаны, осталось получить код на VPS: клон в T017 или `git pull` позже. SQL `host-alert.sh` проверяется на VPS в T047: на ПК нет Docker и Postgres. `nginx -t` и запуск оверлея проверяются на VPS в T020: на ПК разработки Docker не установлен.
 
 **Тесты:** новых автотестов спека не требует: код приложения не меняется (допущение 4). Существующий набор прогоняется на сервере в T021. Остальное проверяется эксплуатационными пробами с записью в acceptance.md.
 
@@ -23,7 +23,7 @@ description: "Задачи 005: перенос стенда на VPS"
 - [x] T003 [Р] `deploy/backup.sh`: `pg_dump -Fc` → проверка `pg_restore --list` → sha256 → rclone в S3 `daily/` и `weekly/` (воскресенье) → ротация 7 дней и 4 недели, локально 3 копии. При ошибке ненулевой код возврата. Unit-файлы `deploy/systemd/ecoprofi-backup.{service,timer}` на 03:30 МСК.
 - [x] T004 [P] [Р] `deploy/table-counts.sql`: точные количества строк всех таблиц `public` (через `query_to_xml`) и список `schema_migrations`.
 - [x] T005 [Р] `specs/005-vps-migration/quickstart.md` с командами и `acceptance.md` с пустой матрицей. Коммит в `master`. Push выполняется до T017.
-- [ ] T006 [Ч] `[ПК]` Снять фактическое потребление для сайзинга: `docker stats --no-stream`, `docker system df -v`, размер БД `docker compose exec -T db psql -U ecoprofi_owner -d ecoprofi -tAc "SELECT pg_size_pretty(pg_database_size('ecoprofi'));"`. Записать в `specs/005-vps-migration/acceptance.md` («Площадка»). Если том БД больше 10 ГБ, диск берётся не меньше 5-кратного объёма тома плюс 30 ГБ (spec.md, «Сайзинг»).
+- [x] T006 [Ч] `[ПК]` Снять фактическое потребление для сайзинга: `docker stats --no-stream`, `docker system df -v`, размер БД `docker compose exec -T db psql -U ecoprofi_owner -d ecoprofi -tAc "SELECT pg_size_pretty(pg_database_size('ecoprofi'));"`. Записать в `specs/005-vps-migration/acceptance.md` («Площадка»). Если том БД больше 10 ГБ, диск берётся не меньше 5-кратного объёма тома плюс 30 ГБ (spec.md, «Сайзинг»).
 
 **Checkpoint:** репозиторий содержит файлы развёртывания, тариф выбран.
 
