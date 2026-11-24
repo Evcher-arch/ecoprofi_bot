@@ -8,6 +8,22 @@
 echo 'alias dc="docker compose -f /opt/ecoprofi/compose.yaml -f /opt/ecoprofi/compose.vps.yaml --profile miniapp --profile daemon"' >> ~/.bashrc && . ~/.bashrc
 ```
 
+## Сквозная проверка функции
+
+Функция считается работающей, когда каждый сценарий ниже имеет запись в [acceptance.md](acceptance.md). Подробные шаги приведены в tasks.md, внешняя поверхность описана в [contracts/vps-host.md](contracts/vps-host.md).
+
+| Сценарий | Предусловие | Проверка | Ожидание | Критерий |
+| --- | --- | --- | --- | --- |
+| Вход из сетей | DNS → IP VPS, сертификат выпущен | `curl.exe -sSI https://miniapp.bot-alimony.ru/` с ПК и открытие с телефона в 3 мобильных сетях и 1 домашней | 200, CSP `frame-ancestors` VK, HSTS, TTFB ≤ 1 с | SC-01 |
+| Данные без потерь | Восстановлен снимок переноса | раздел «Сверка количеств» и 4 контрольных вопроса | пустой `diff`, те же источники | SC-02 |
+| Mini App с сервера | Сервисы VPS запущены | матрица 004 на телефоне и ПК (T037–T039) | как на локальном стенде | SC-03 |
+| Перезагрузка | Стенд работает | `sudo reboot`, через 3 мин `dc ps` и `curl` | все Up/healthy, 200 | SC-04 |
+| Восстановление копии | Есть ночная копия в S3 | раздел «Резервная копия», пробное восстановление | совпадение количеств, записаны длительность и давность копии | SC-05 |
+| Автономность | ПК выключен | журнал проходов 07:00/19:00 за 7 суток | исход на каждый срок, ≤ 2 автоопросов в сутки | SC-06 |
+| Сертификат | Шлюз на 80/443 | `sudo certbot renew --dry-run` | успешно | SC-07 |
+| Поверхность и секреты | Стенд работает | `Test-NetConnection <IP> -Port 5432/8000/8080/22/80/443`, `dc logs \| grep -Ei "sign=\|token\|secret\|bearer\|password"` | открыты только 22/80/443, реальных значений в логах нет | SC-08 |
+| Оповещения хоста | Юниты `cert-check` и `backup` установлены | раздел «Оповещения хоста» | сообщения об открытии и восстановлении дошли оператору | граничный случай «сертификат», FR-09 |
+
 ## Файлы развёртывания
 
 | Файл | Назначение |
@@ -77,6 +93,33 @@ docker compose cp db:/tmp/counts.txt out/counts-pc.txt
 # [VPS]
 docker compose exec -T db psql -U ecoprofi_owner -d ecoprofi -tA < deploy/table-counts.sql > out/counts-vps.txt
 diff out/counts-pc.txt out/counts-vps.txt && echo "совпадает"
+# статистика планировщика не переносится pg_restore (research R7)
+docker compose exec -T db vacuumdb -U ecoprofi_owner -d ecoprofi --analyze-only
+# версии для протокола и будущего возврата на ПК
+docker compose exec -T db psql -U ecoprofi_owner -d ecoprofi -tAc "SELECT version(); SELECT extversion FROM pg_extension WHERE extname='vector';"
+```
+
+## Журналы Docker и зеркало реестра
+
+`/etc/docker/daemon.json` настраивается до первого `up` (research R6). Ключ `registry-mirrors` добавляется, только если без него не работает T013:
+
+```bash
+sudo tee /etc/docker/daemon.json >/dev/null <<'EOF'
+{ "log-driver": "json-file", "log-opts": { "max-size": "10m", "max-file": "5" } }
+EOF
+sudo systemctl restart docker
+```
+
+## Оповещения хоста (план, файлы появятся по tasks.md)
+
+Контракт описан в [contracts/host-alerts.md](contracts/host-alerts.md). Ниже приведены проверочные команды после установки юнитов:
+
+```bash
+deploy/host-alert.sh open tls "Проверка канала оповещений хоста"   # сообщение оператору в течение минуты
+deploy/host-alert.sh close tls                                      # одно сообщение «Восстановлено»
+CERT_WARN_DAYS=90 deploy/cert-check.sh                              # открывает tls при запасе < 90 дней
+deploy/cert-check.sh                                                # закрывает tls при запасе ≥ 14 дней
+systemctl list-timers ecoprofi-cert-check ecoprofi-backup
 ```
 
 ## Резервная копия
@@ -119,3 +162,5 @@ docker rm -f restore-check && rm -rf out/restore
 | 502 на API | `dc logs --tail 50 bot`; `dc ps bot` |
 | DNS указывает не туда | с ПК: `Resolve-DnsName miniapp.bot-alimony.ru -Server 8.8.8.8` и `-Server 77.88.8.8` |
 | Нет свежей копии | `systemctl list-timers ecoprofi-backup`; `journalctl -u ecoprofi-backup -n 50` |
+| DNS отвечает SERVFAIL после смены NS | `Resolve-DnsName bot-alimony.ru -Type DS -Server 8.8.8.8`: DS от Cloudflare не удалён у REG.RU (research R5) |
+| Compose не загружает проект: нет файла секрета туннеля | `install -m 600 /dev/null deploy/secrets/cloudflared-token.txt` (research R12) |
