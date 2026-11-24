@@ -12,7 +12,7 @@
 | 8080/tcp | `miniapp-gateway` на `127.0.0.1` | нет | То же содержимое без TLS, для диагностики с хоста |
 | 5432, 8000 | `db`, `bot` в сети `internal` | нет | Не публикуются (`ports` отсутствуют) |
 
-Проверка: внешний скан с ПК показывает открытыми только 22, 80 и 443 (SC-08, T030). Docker обходит ufw, поэтому `ports` в Compose добавлять запрещено: изменение этого списка требует правки контракта.
+Проверка: внешний скан с ПК показывает открытыми только 22, 80 и 443 (SC-08, T025). Docker обходит ufw, поэтому `ports` в Compose добавлять запрещено: изменение этого списка требует правки контракта.
 
 ## HTTP-ответы на 443 (наблюдаемые при приёмке)
 
@@ -65,4 +65,4 @@ docker compose -f compose.yaml -f compose.vps.yaml --profile miniapp --profile d
 
 ## Исходящие соединения, которые обязана разрешать площадка
 
-`api.vk.com` и `*.vk.com` / `*.userapi.com` (Long Poll, документы, дорожки), `llm.api.cloud.yandex.net` (AI Studio), `github.com:22` (deploy key), Docker Hub или зеркало провайдера, `acme-v02.api.letsencrypt.org`, S3-эндпоинт провайдера. Проверка — T013, T014.
+`api.vk.com` и `*.vk.com` / `*.userapi.com` (Long Poll, документы, дорожки), `llm.api.cloud.yandex.net` (AI Studio), `github.com:22` (deploy key), Docker Hub или зеркало провайдера, `acme-v02.api.letsencrypt.org`, S3-эндпоинт провайдера. Проверка — T015, T016.
