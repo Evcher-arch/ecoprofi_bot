@@ -31,7 +31,11 @@ echo 'alias dc="docker compose -f /opt/ecoprofi/compose.yaml -f /opt/ecoprofi/co
 | `compose.vps.yaml` | Оверлей: шлюз публикует 80/443, монтирует сертификаты и VPS-конфиг nginx |
 | `deploy/vps/miniapp-nginx.conf` | 80 → ACME и 301; 443 → TLS Let's Encrypt и allowlist `miniapp-server.inc`; 8080 → диагностика на 127.0.0.1 |
 | `deploy/backup.sh` | Дамп → проверка `pg_restore --list` → sha256 → S3 daily/weekly → ротация |
-| `deploy/systemd/ecoprofi-backup.{service,timer}` | Запуск копии ежедневно в 03:30 МСК |
+| `deploy/systemd/ecoprofi-backup.{service,timer}` | Запуск копии ежедневно в 03:30 МСК; при сбое — `ecoprofi-alert-backup.service` (оповещение `backup`) |
+| `deploy/host-alert.sh` | Открыть или закрыть оповещение хоста `tls` / `backup` в очереди `alert` ([contracts/host-alerts.md](contracts/host-alerts.md)) |
+| `deploy/cert-check.sh` | Срок сертификата: меньше `CERT_WARN_DAYS` (14) дней — открыть `tls`, иначе закрыть |
+| `deploy/systemd/ecoprofi-cert-check.{service,timer}` | Проверка сертификата ежедневно в 09:00 МСК |
+| `deploy/systemd/ecoprofi-alert-backup.service` | Открывает `backup`, запускается через `OnFailure=` юнита копии |
 | `deploy/table-counts.sql` | Точные количества строк и список миграций для сверки |
 
 `miniapp-realip.inc` и профиль `tunnel` на VPS не используются: шлюз видит адрес участника напрямую.
@@ -110,7 +114,7 @@ EOF
 sudo systemctl restart docker
 ```
 
-## Оповещения хоста (план, файлы появятся по tasks.md)
+## Оповещения хоста
 
 Контракт описан в [contracts/host-alerts.md](contracts/host-alerts.md). Ниже приведены проверочные команды после установки юнитов:
 

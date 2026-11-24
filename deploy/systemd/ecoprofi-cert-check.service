@@ -1,0 +1,9 @@
+[Unit]
+Description=Ecoprofi: daily TLS certificate expiry check (specs/005-vps-migration)
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/ecoprofi/deploy/cert-check.sh
+TimeoutStartSec=5min

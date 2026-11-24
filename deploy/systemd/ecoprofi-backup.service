@@ -3,6 +3,8 @@ Description=Ecoprofi: nightly PostgreSQL backup to S3 (specs/005-vps-migration)
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
+# Сбой копии открывает оповещение хоста backup (contracts/host-alerts.md).
+OnFailure=ecoprofi-alert-backup.service
 
 [Service]
 Type=oneshot

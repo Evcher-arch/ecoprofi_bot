@@ -41,4 +41,8 @@ ls -1t "$BACKUP_DIR"/ecoprofi-*.dump | tail -n +"$((LOCAL_KEEP + 1))" | while re
     rm -f -- "$old" "$old.sha256"
 done
 
+# Копия создана: закрыть оповещение backup, если оно открыто. Сбой закрытия копию не отменяет.
+"$PROJECT_DIR/deploy/host-alert.sh" close backup \
+    || echo "warning: не удалось закрыть оповещение backup" >&2
+
 echo "backup ok: $(basename "$file") $(stat -c %s "$file") bytes"

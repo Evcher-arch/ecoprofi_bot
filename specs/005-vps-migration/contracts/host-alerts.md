@@ -21,7 +21,7 @@ host-alert.sh close <причина>           # закрыть открытую
 - `<причина>` принимает только значения из таблицы выше (`tls`, `backup`). На другое значение скрипт отвечает кодом 2. Скрипт не пишет причины 003.
 - Запись выполняется через `docker compose -f /opt/ecoprofi/compose.yaml exec -T db psql -U ecoprofi_owner -d ecoprofi -v ON_ERROR_STOP=1`. Значения передаются переменными psql (`:'cause'`, `:'body'`), а не подстановкой в текст SQL.
 - `open` — одна транзакция: обновить `body` открытой записи с этим `cause_key`, а если её нет, вставить `(cause_key, kind='action', body)`. Повторный `open` не создаёт второй записи: это гарантирует `alert_open_idx`.
-- `close`: `UPDATE alert SET state='closed', closed_at=now() WHERE cause_key=:'cause' AND state='open'`. Если открытой записи нет, ничего не меняется.
+- `close`: `UPDATE alert SET state='closed', closed_at=now(), recovery_sent = (sent_count = 0) WHERE cause_key=:'cause' AND state='open'`, как `close_alert` в `ecoprofi/indexer/alerts.py`. Если о причине ещё не сообщали, сообщение «Восстановлено» не отправляется. Если открытой записи нет, ничего не меняется.
 - Если БД недоступна, код возврата ненулевой, а сообщение уходит в журнал юнита. Оповещение в этом случае не доставляется: на это сработает `stale` или внешний мониторинг (research R11).
 
 ## Текст

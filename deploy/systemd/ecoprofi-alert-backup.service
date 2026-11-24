@@ -1,0 +1,11 @@
+[Unit]
+Description=Ecoprofi: open host alert "backup" after a failed nightly backup (specs/005-vps-migration)
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=deploy
+Group=docker
+ExecStart=/opt/ecoprofi/deploy/host-alert.sh open backup "Ночная резервная копия БД не создана. Выполнить: journalctl -u ecoprofi-backup -n 50; sudo systemctl start ecoprofi-backup.service"
+TimeoutStartSec=5min
