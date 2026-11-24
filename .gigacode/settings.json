@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker stats *)",
+      "Bash(docker system *)",
+      "Bash(docker compose exec *)",
+      "Bash(docker volume *)",
+      "Bash(docker run *)"
+    ]
+  },
+  "$version": 4
+}
