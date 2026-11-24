@@ -1,0 +1,66 @@
+import { useState } from 'react';
+import { Button, Card, Paragraph, Spinner, Textarea, Title } from '@vkontakte/vkui';
+import { MaterialCard } from './MaterialCard';
+import type { Session } from '../types';
+import { useChat } from '../useChat';
+import { api } from '../api';
+
+interface Props {
+  session: Session;
+  onDialog?: (id: string) => void;
+  onExpired?: () => void;
+}
+
+export function Chat({ session, onDialog, onExpired }: Props) {
+  const [text, setText] = useState('');
+  const { items, loading, error, busy, submit, newDialog } =
+    useChat(session.dialog_id, session.token, api, onDialog, onExpired);
+  const length = Array.from(text).length;
+
+  async function send() {
+    if (!text.trim() || length > 2000 || busy) return;
+    // Текст очищается только после принятия вопроса сервером; при ошибке остаётся редактируемым.
+    if (await submit(text)) setText('');
+  }
+
+  return (
+    <main style={{ maxWidth: 760, margin: '0 auto', padding: 16, boxSizing: 'border-box' }}>
+      <Title level="1">Найти лекцию по Экобезу</Title>
+      <Button mode="secondary" style={{ margin: '12px 0' }} onClick={() => void newDialog()}>Новый диалог</Button>
+      <section aria-label="История диалога">
+        {loading && <Spinner aria-label="Загрузка истории" />}
+        {error && <Paragraph role="alert">{error}</Paragraph>}
+        {items.map((item) => (
+          <Card key={item.request_id} mode="outline" style={{ padding: 14, marginBottom: 12 }}>
+            <Paragraph>{item.question}</Paragraph>
+            {(item.state === 'queued' || item.state === 'running') && <Paragraph>Поиск материалов…</Paragraph>}
+            {item.answer && <>
+              <Paragraph style={{ whiteSpace: 'pre-wrap' }}>{item.answer.text}</Paragraph>
+              {item.answer.cards.map((card) => <MaterialCard key={card.material_id} card={card} />)}
+            </>}
+            {item.message && <Paragraph>{item.message}</Paragraph>}
+            {item.retry_allowed && <Button mode="secondary" onClick={() => void submit(item.question, item)}>Повторить</Button>}
+          </Card>
+        ))}
+      </section>
+      <form onSubmit={(event) => { event.preventDefault(); void send(); }}>
+        <Textarea
+          aria-label="Вопрос"
+          placeholder="Опишите тему, документ или лекцию"
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              void send();
+            }
+          }}
+        />
+        <Paragraph aria-live="polite">{length}/2000</Paragraph>
+        <Button size="l" stretched type="submit" disabled={!text.trim() || length > 2000 || busy}>
+          {busy ? 'Отправка…' : 'Отправить'}
+        </Button>
+      </form>
+    </main>
+  );
+}

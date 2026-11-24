@@ -1,0 +1,63 @@
+Cloudflare Tunnel для miniapp.bot-alimony.ru
+Актуально: 2026-11-24. Заменяет прежнюю инструкцию с белым IP и NAT 443.
+
+1. В Cloudflare проверьте, что зона bot-alimony.ru имеет статус Active.
+   Если зона ожидает смены NS, укажите в REG.RU серверы имён, выданные Cloudflare.
+
+2. В кабинете Cloudflare откройте Networking → Tunnels (в Cloudflare One раздел
+   может называться Networks → Connectors), создайте Cloudflared Tunnel
+   с названием ecoprofi-miniapp. Выберите Docker в подсказке подключения.
+   Команду из кабинета запускать не нужно: контейнер уже описан в compose.yaml.
+
+3. Скопируйте только токен из команды после --token в файл:
+   deploy/secrets/cloudflared-token.txt
+   Одна строка, без кавычек, без --token, без самой команды; UTF-8 без BOM.
+   Каталог уже подготовлен. Токен не отправляйте в чат.
+   Файл исключён из Git и Docker build context; получает его только miniapp-tunnel.
+
+4. Добавьте Published application route / Public hostname:
+   Subdomain: miniapp
+   Domain: bot-alimony.ru
+   Path: оставить пустым
+   Service Type: HTTP
+   URL: 127.0.0.1:8080
+   Итоговый сервис: http://127.0.0.1:8080
+   Здесь localhost правильный: cloudflared и nginx используют общий сетевой
+   namespace Docker. Не указывайте порт bot:8000 или белый IP ПК.
+   Если Cloudflare сообщает о существующей записи, удалите только старую A/AAAA
+   miniapp, направленную на ПК, и повторите добавление маршрута. Другие записи
+   домена не меняйте. Результат: проксируемый CNAME miniapp → <UUID>.cfargotunnel.com.
+   Не включайте Cloudflare Access с отдельным входом: личность проверяется VK Mini App.
+
+5. В PowerShell из папки проекта запустите:
+   docker compose --profile miniapp --profile tunnel up -d miniapp-gateway miniapp-tunnel
+   Затем проверьте:
+   docker compose --profile miniapp --profile tunnel ps
+   curl.exe -sSI https://miniapp.bot-alimony.ru/
+   Туннель в кабинете должен быть Healthy; страница должна отвечать 200 и
+   Content-Security-Policy с frame-ancestors VK. ПК и Docker Desktop должны работать.
+   При обновлении шлюза повторяйте команду up для обоих сервисов вместе.
+
+6. В настройках VK Mini App 54916430 для всех нужных платформ укажите:
+   https://miniapp.bot-alimony.ru
+   MINIAPP_PUBLIC_ORIGIN в .env уже имеет это значение.
+
+Белый IP, входящий 443, проброс NAT и Origin CA для этого пути не нужны.
+Если проброс 443 был создан специально для Mini App, удалите его на роутере.
+На хосте шлюз публикует только 127.0.0.1:8080. Соединение ПК → Cloudflare
+исходящее и зашифрованное; локальный HTTP остаётся внутри сетевого namespace.
+
+Состояние на 2026-11-24: файл токена сохранён, коннектор miniapp-tunnel запущен.
+Подключение пока не установлено: QUIC даёт тайм-аут, HTTP/2 — TLS handshake EOF.
+Та же ошибка TLS воспроизводится с Windows напрямую и через локальный SOCKS-прокси.
+В Compose выбран HTTP/2 (TCP 7844); входящий порт открывать не требуется.
+Нужен работающий исходящий доступ к Cloudflare Tunnel на 7844 и подтверждение
+маршрута из пункта 4. Домен при проверке ответил 522; локальный шлюз — 200.
+Проверка готовности коннектора (сейчас 503, после подключения ожидается 200):
+docker exec ecoprofi-miniapp-gateway-1 wget -qO- -T 5 http://127.0.0.1:20241/ready
+Токен считан из файла, но его принятие Cloudflare ещё не подтверждено:
+TLS-соединение до стадии аутентификации не устанавливается.
+
+Официальные инструкции:
+https://developers.cloudflare.com/tunnel/get-started/
+https://developers.cloudflare.com/tunnel/reference/run-parameters/#token-file
