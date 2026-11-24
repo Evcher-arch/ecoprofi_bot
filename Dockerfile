@@ -48,7 +48,4 @@ COPY deploy/miniapp-server.inc /etc/nginx/conf.d/miniapp-server.inc
 COPY deploy/miniapp-realip.inc /etc/nginx/conf.d/miniapp-realip.inc
 COPY deploy/miniapp-proxy.inc /etc/nginx/conf.d/miniapp-proxy.inc
 COPY --from=miniapp-build /build/dist /usr/share/nginx/html
-# Каталоги для монтирования TLS-блока и сертификата Cloudflare Origin CA.
-# Пустой conf.d/tls означает «только локальный 8080» (см. deploy/miniapp-nginx.conf).
-RUN mkdir -p /etc/nginx/conf.d/tls /etc/nginx/certs
-EXPOSE 8080 443
+EXPOSE 8080

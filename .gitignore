@@ -40,3 +40,4 @@ tools/miniapp-probe/test-results/
 
 # Сертификат и ключ публичного входа Mini App (Cloudflare Origin CA)
 deploy/certs/
+deploy/secrets/

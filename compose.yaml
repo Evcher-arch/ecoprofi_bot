@@ -93,19 +93,27 @@ services:
     image: ecoprofi-miniapp-gateway:local
     profiles: [miniapp]
     ports:
-      # Публичный HTTPS-вход за проксируемой A-записью Cloudflare: NAT 443 → этот порт.
-      # Входящий 443 ограничить диапазонами Cloudflare (deploy/miniapp-realip.inc).
-      - "443:443"
-      # Локальная диагностика шлюза; наружу не публикуется.
+      # Только локальная диагностика; внешний вход — исходящий Cloudflare Tunnel.
       - "127.0.0.1:8080:8080"
-    volumes:
-      # TLS-блок и сертификат Cloudflare Origin CA; без них шлюз работает только на 8080.
-      - ./deploy/miniapp-tls.conf:/etc/nginx/conf.d/tls/miniapp-tls.conf:ro
-      - ./deploy/certs:/etc/nginx/certs:ro
     environment:
       MINIAPP_PUBLIC_ORIGIN: ${MINIAPP_PUBLIC_ORIGIN:-}
     depends_on: [bot]
     networks: [internal]
+    restart: unless-stopped
+
+  miniapp-tunnel:
+    image: cloudflare/cloudflared:2026.11.1
+    profiles: [tunnel]
+    # Общий loopback: в Cloudflare маршрут должен вести на http://127.0.0.1:8080.
+    # nginx доверяет CF-Connecting-IP только от этого loopback.
+    network_mode: service:miniapp-gateway
+    # QUIC/UDP на текущем подключении не устанавливается; используем HTTP/2 по TCP.
+    command: ["tunnel", "--no-autoupdate", "--loglevel", "warn", "--protocol", "http2", "--metrics", "127.0.0.1:20241", "run", "--token-file", "/run/secrets/miniapp_tunnel_token"]
+    secrets: [miniapp_tunnel_token]
+    depends_on:
+      miniapp-gateway:
+        condition: service_started
+        restart: true
     restart: unless-stopped
 
   vk-adapter:
@@ -180,6 +188,10 @@ services:
     depends_on:
       test-db:
         condition: service_healthy
+
+secrets:
+  miniapp_tunnel_token:
+    file: ./deploy/secrets/cloudflared-token.txt
 
 volumes:
   db-data:

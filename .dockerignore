@@ -30,3 +30,5 @@ mini-app/playwright-report/
 node_modules/
 playwright-report/
 test-results/
+deploy/secrets/
+deploy/certs/
