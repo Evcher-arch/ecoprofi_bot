@@ -20,6 +20,7 @@ venv/
 Dockerfile*
 .dockerignore
 compose.yaml
+compose.vps.yaml
 schedule.html
 out/
 tools/

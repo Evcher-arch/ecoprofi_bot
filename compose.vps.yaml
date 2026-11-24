@@ -1,0 +1,14 @@
+# Оверлей для VPS (specs/005-vps-migration). Используется вместе с compose.yaml:
+#   docker compose -f compose.yaml -f compose.vps.yaml --profile miniapp --profile daemon up -d
+# Прямой HTTPS на шлюзе с сертификатом Let's Encrypt; Cloudflare и профиль tunnel не используются.
+# Порты оверлея добавляются к 127.0.0.1:8080 из compose.yaml (локальная диагностика).
+# Наружу публикуются только 80 и 443: Docker обходит ufw, поэтому других ports не добавлять.
+services:
+  miniapp-gateway:
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/vps/miniapp-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/certbot:/var/www/certbot:ro

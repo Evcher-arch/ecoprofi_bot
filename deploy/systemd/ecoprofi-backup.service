@@ -1,0 +1,13 @@
+[Unit]
+Description=Ecoprofi: nightly PostgreSQL backup to S3 (specs/005-vps-migration)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=deploy
+Group=docker
+EnvironmentFile=/etc/ecoprofi-backup.env
+ExecStart=/opt/ecoprofi/deploy/backup.sh
+TimeoutStartSec=1h
