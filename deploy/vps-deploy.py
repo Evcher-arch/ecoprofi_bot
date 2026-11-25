@@ -27,8 +27,10 @@ import argparse
 import os
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
+import io
 from pathlib import Path
 
 try:
@@ -100,31 +102,35 @@ def run_ssh(c, cmd, timeout=60, stdin_data=None):
     return out, err
 
 
-def upload_dir(sftp, local, remote, project_root):
-    """Рекурсивно загрузить директорию на VPS через SFTP."""
-    for item in local.rglob("*"):
-        if item.is_dir():
-            continue
-        if item.name == ".git" or item.name == "__pycache__":
-            continue
-        if item.suffix == ".pyc":
-            continue
-        # Относительный путь от корня проекта
-        rel = str(item.relative_to(project_root))
-        remote_path = os.path.join(remote, rel)
-        remote_dir = os.path.dirname(remote_path)
-        try:
-            sftp.stat(remote_dir)
-        except FileNotFoundError:
-            parts = remote_dir.strip("/").split("/")
-            cur = ""
-            for p in parts:
-                cur = cur + "/" + p if cur else "/" + p
-                try:
-                    sftp.stat(cur)
-                except FileNotFoundError:
-                    sftp.mkdir(cur)
-        sftp.put(str(item), remote_path)
+def upload_dir(sftp, c, local, remote, project_root):
+    """Загрузить директорию на VPS через tar.gz (быстро)."""
+    local_path = Path(local)
+    remote_tar = f"{remote}/{local_path.name}.tar.gz"
+    
+    # Создаём tar.gz в памяти
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for item in local_path.rglob("*"):
+            if item.is_dir():
+                continue
+            rel = str(item.relative_to(project_root))
+            # Пропускаем ненужное
+            parts = Path(rel).parts
+            if any(p in (".git", "__pycache__", ".gigacode", ".idea", ".claude", ".specify") for p in parts):
+                continue
+            if item.suffix == ".pyc":
+                continue
+            tar.add(item, arcname=rel)
+    
+    buf.seek(0)
+    size_mb = len(buf.getvalue()) / 1024 / 1024
+    
+    # Загружаем tar на VPS
+    sftp.putfo(buf, remote_tar)
+    print(f"    {local_path.name}: {size_mb:.1f} MB", file=sys.stderr)
+    
+    # Распаковываем на VPS
+    run_ssh(c, f"mkdir -p {remote}/{local_path.name} && tar xzf {remote_tar} -C {remote}/{local_path.name} && rm -f {remote_tar}")
 
 
 # ---------- Деплой ----------
@@ -165,7 +171,7 @@ def deploy(args):
             if item.is_dir():
                 if item.name in ("deploy", "__pycache__", ".git", ".gigacode", ".idea", ".claude", ".specify"):
                     continue
-                upload_dir(sftp, item, remote_root, project_dir)
+                upload_dir(sftp, client, item, remote_root, project_dir)
             elif item.name in (".env", "images.tar", "images.tar.gz", ".env.remote"):
                 continue  # пропускаем
             else:

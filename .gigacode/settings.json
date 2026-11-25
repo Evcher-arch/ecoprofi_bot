@@ -41,7 +41,22 @@
       "Bash(python deploy\\vps-ssh.py run \"cd /opt/ecoprofi && bash deploy/migrate-vps.sh login\" *)",
       "Bash(set *)",
       "Bash(python deploy\\vps-ssh.py run \"cd /opt/ecoprofi && docker compose -f compose.yaml -f compose.vps.yaml --profile miniapp --profile daemon ps\" *)",
-      "Bash(python deploy\\vps-ssh.py run \"curl -sS -o /dev/null -w '%{http_code}' https://miniapp.bot-alimony.ru/ 2>&1\" *)"
+      "Bash(python deploy\\vps-ssh.py run \"curl -sS -o /dev/null -w '%{http_code}' https://miniapp.bot-alimony.ru/ 2>&1\" *)",
+      "Bash(python deploy/vps-deploy.py --password 2wPChBsRddjJguuP *)",
+      "Bash(start *)",
+      "Bash(30 *)",
+      "Bash(60 *)",
+      "Bash(docker build *)",
+      "Bash(docker save *)",
+      "Bash(dir *)",
+      "Bash(Invoke-Expression *)",
+      "Bash(python -c \"import paramiko, os; c=paramiko.SSHClient(); c.set_missing_host_key_policy(paramiko.AutoAddPolicy()); c.connect('79.174.78.44', username='root', password='2wPChBsRddjJguuP', timeout=15); sftp=c.open_sftp(); sftp.put('images.tar', '/opt/ecoprofi/images.tar'); print('UPLOADED')\" *)",
+      "Bash(python deploy\\quick-deploy.py *)",
+      "Bash(python deploy\\check-logs.py *)",
+      "Bash(del *)",
+      "Bash(python deploy\\vps-deploy.py --password 2wPChBsRddjJguuP *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
     ]
   },
   "$version": 4
