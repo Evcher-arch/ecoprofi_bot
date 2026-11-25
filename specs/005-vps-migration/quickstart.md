@@ -71,6 +71,11 @@ python deploy/vps-deploy.py
 | `deploy/systemd/ecoprofi-cert-check.{service,timer}` | Проверка сертификата ежедневно в 09:00 МСК |
 | `deploy/systemd/ecoprofi-alert-backup.service` | Открывает `backup`, запускается через `OnFailure=` юнита копии |
 | `deploy/table-counts.sql` | Точные количества строк и список миграций для сверки |
+| `deploy/migrate-pc.ps1` | Перенос, сторона ПК: `check` → `freeze` (T026) → `snapshot` (T027) → `finalize` (T032); `resume` — откат до точки невозврата |
+| `deploy/migrate-vps.sh` | Перенос, сторона VPS: `stop-writers` → `restore` (T029) → `verify` (T030) → `start` (T031) → `login` (T033) → `daemon` (T035) |
+| `deploy/vps-ssh.py` | `install-key` / `put` / `run` на VPS без интерактивного пароля (пароль только из `VPS_PASSWORD`) |
+
+Порядок переноса и предусловия P0–P5 — в [tasks.md](tasks.md), Phase 4.
 
 `miniapp-realip.inc` и профиль `tunnel` на VPS не используются: шлюз видит адрес участника напрямую.
 

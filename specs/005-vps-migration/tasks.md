@@ -6,7 +6,7 @@ description: "Задачи 005: перенос стенда на VPS"
 
 **Вход:** [spec.md](spec.md), [plan.md](plan.md), [research.md](research.md), [data-model.md](data-model.md), [contracts/](contracts/), [quickstart.md](quickstart.md).
 
-**Дата:** 2026-11-24 (перестроено по plan.md, нумерация изменена). **Статус:** 21/55. Подготовка репозитория T001–T005 и скрипты оповещений хоста T041–T044 выполнены (2026-11-24). Единый скрипт деплоя deploy/vps-deploy.py создан (2026-11-25). Фактический деплой на VPS 79.174.78.44 выполнен 2026-11-25: образы собраны локально, загружены через docker save/load, роли БД созданы через db/init/01_roles.sql, миграции применены, SSL-сертификат выпущен, все 5 сервисов работают (bot, db, indexer-daemon, vk-adapter, miniapp-gateway). HTTPS miniapp.bot-alimony.ru → 200 OK.
+**Дата:** 2026-11-24 (перестроено по plan.md, нумерация изменена). **Статус:** 20/55. Перенос данных (Phase 4) подготовлен скриптами `deploy/migrate-pc.ps1`, `deploy/migrate-vps.sh`, `deploy/vps-ssh.py` (2026-11-25), см. «Порядок переноса скриптами». Файлы `deploy/backup.sh`, `cert-check.sh`, `host-alert.sh`, `table-counts.sql`, `miniapp-*.inc/.conf` были случайно удалены коммитом `ee73d9f` и восстановлены (без них `Dockerfile` не собирает шлюз, а T030 нечем сверять). Подготовка репозитория T001–T005 и скрипты оповещений хоста T041–T044 выполнены (2026-11-24). Единый скрипт деплоя deploy/vps-deploy.py создан (2026-11-25). Фактический деплой на VPS 79.174.78.44 выполнен 2026-11-25: образы собраны локально, загружены через docker save/load, роли БД созданы через db/init/01_roles.sql, миграции применены, SSL-сертификат выпущен, все 5 сервисов работают (bot, db, indexer-daemon, vk-adapter, miniapp-gateway). HTTPS miniapp.bot-alimony.ru → 200 OK.
 
 **Обозначения.** `[P]` — можно выполнять параллельно с соседними задачами (другие файлы или другая площадка, нет зависимости от незавершённых задач). `[US1]`–`[US3]` — история spec.md. **[Ч]** — выполняет человек (владелец или оператор) по шагам. **[Р]** — изменение репозитория, выполняет разработчик или Claude. `[ПК]` — PowerShell на текущем ПК из папки проекта. `[VPS]` — bash на сервере под пользователем `deploy` в `/opt/ecoprofi`. `dc` — alias из quickstart: `docker compose -f compose.yaml -f compose.vps.yaml --profile miniapp --profile daemon`. Результат каждой задачи **[Ч]** записывается в `specs/005-vps-migration/acceptance.md`: дата, факт, отклонения. Секреты в протокол не вносятся.
 
@@ -76,17 +76,38 @@ description: "Задачи 005: перенос стенда на VPS"
 
 Окно работ — около 1 часа, вне плановых проходов 07:00/19:00 МСК. Участников предупредить заранее. Переходы состояний контура описаны в data-model.md («Рабочий контур»).
 
-- [ ] T026 [US2] [Ч] `[ПК]` Перевод в `freeze` — не выполнялся, перенос данных не выполнен.
-- [ ] T027 [US2] [Ч] `[ПК]` Снимок переноса и контрольные данные — не выполнялся.
-- [ ] T028 [US2] [Ч] Передача дампа на VPS — не выполнялась.
-- [ ] T029 [US2] [Ч] `[VPS]` Восстановление в БД — не выполнялось.
-- [ ] T030 [US2] [Ч] `[VPS]` Сверка — не выполнялась.
-- [x] T031 [US2] [Ч] `[VPS]` Запуск сервисов — **выполнен вручную** 2026-11-25: bot, vk-adapter, miniapp-gateway, indexer-daemon, db — все Up. Отклонение: запуск на пустой БД, перенос данных (T026–T030) не выполнялся.
-- [ ] T032 [US2] [Ч] `[ПК]` Зафиксировать контур — не выполнялся.
-- [ ] T033 [US2] [Ч] `[VPS]` Новый вход оператора — не выполнялся.
-- [ ] T034 [US2] [Ч] `[VPS]` Разовая проверка чтения на сервере — не выполнялась.
-- [ ] T035 [US2] [Ч] `[VPS]` Плановый режим — не выполнялся.
-- [ ] T036 [US2] [Ч] Оповещения с VPS — **не проверялась** доставка оператору.
+### Порядок переноса скриптами (добавлено 2026-11-25)
+
+Перенос выполняется на **ПК со стендом** (там, где Docker и том `ecoprofi_db-data`), скриптами из репозитория:
+
+- `deploy/migrate-pc.ps1 -Step check|freeze|snapshot|finalize|resume` — сторона ПК;
+- `deploy/migrate-vps.sh stop-writers|restore|verify|start|login|daemon` — сторона VPS, запуск из `/opt/ecoprofi`;
+- `deploy/vps-ssh.py install-key|put|run` — доступ к VPS без интерактивного пароля (пароль только из `VPS_PASSWORD`).
+
+Каждый шаг пишет журнал в `out/migration-pc.log` / `out/migration-vps.log`. Скрипты останавливаются при любом расхождении, `down -v` не выполняется нигде.
+
+**Предусловия (проверить до окна, P0–P5):**
+
+- [ ] P0 Пароль root VPS сменён: прежний попал в историю git (коммит `ee73d9f`). Новый задаётся только в окружении: `$env:VPS_PASSWORD = '...'` в терминале, из которого запускается Claude.
+- [ ] P1 На ПК со стендом: `git pull` (нужны восстановленные `deploy/table-counts.sql`, `deploy/miniapp-*.inc` и скрипты переноса), Docker Desktop запущен, `docker compose ps` показывает стенд, Python 3.10+ и `pip install paramiko`.
+- [ ] P2 SSH-ключ на VPS: `ssh-keygen -t ed25519` (если ключа нет), затем `python deploy/vps-ssh.py install-key`. Проверка: `ssh root@79.174.78.44 "cd /opt/ecoprofi && docker compose ps"` работает без пароля. Дальше используются обычные `ssh`/`scp`.
+- [ ] P3 Скрипты на VPS: `vps-deploy.py` не загружает `deploy/`, поэтому `scp deploy/migrate-vps.sh deploy/table-counts.sql root@79.174.78.44:/opt/ecoprofi/deploy/`.
+- [ ] P4 Сразу, не дожидаясь окна: `ssh root@79.174.78.44 "cd /opt/ecoprofi && bash deploy/migrate-vps.sh stop-writers"`. Сейчас bot и vk-adapter работают одновременно на ПК и VPS — нарушение FR-07.
+- [ ] P5 Окно — вне 06:30–08:30 и 18:30–20:30 МСК (`freeze` в этом окне откажет без `-Force`), участники предупреждены. **До конца переноса `deploy/vps-deploy.py` не запускать:** он поднимает писателей на VPS.
+
+**Отличие от исходного плана (T029):** БД на VPS не пустая по схеме — `vps-deploy.py` уже применил миграции 001–004. Поэтому `restore` пересоздаёт БД `ecoprofi` (`DROP DATABASE … WITH (FORCE)` + `CREATE DATABASE`), роли кластера сохраняются. Если в БД VPS есть строки данных, `restore` отказывает без `FORCE_RESTORE=1`.
+
+- [ ] T026 [US2] [Ч] `[ПК]` Перевод в `freeze`: `powershell -ExecutionPolicy Bypass -File deploy/migrate-pc.ps1 -Step check`, затем `-Step freeze`. Скрипт показывает `indexer status` и останавливает vk-adapter, indexer-daemon, bot, miniapp-tunnel, miniapp-gateway; `db` работает. Время остановки — в `out/migration-pc.log` и acceptance.md.
+- [ ] T027 [US2] [Ч] `[ПК]` Снимок: `migrate-pc.ps1 -Step snapshot`. Отказывает, если писатели работают. Создаёт в `out/` (не в Git): `ecoprofi-migration.dump` (проверен `pg_restore --list`), `ecoprofi-migration.dump.sha256`, `counts-pc.txt`, `versions-pc.txt`. SHA256, размер, версии PostgreSQL и pgvector — в acceptance.md. Дамп содержит закрытые данные.
+- [ ] T028 [US2] [Ч] Передача: `scp out/ecoprofi-migration.dump out/ecoprofi-migration.dump.sha256 out/counts-pc.txt root@79.174.78.44:/opt/ecoprofi/out/`. Хэш проверяет следующий шаг (`sha256sum -c`).
+- [ ] T029 [US2] [Ч] `[VPS]` Восстановление: `ssh root@79.174.78.44 "cd /opt/ecoprofi && bash deploy/migrate-vps.sh restore"`. Проверка SHA256 → защита от затирания данных → проверка ролей → пересоздание БД → `pg_restore --exit-on-error` → `migrate` (ожидается: новых миграций нет) → `vacuumdb --analyze-only`. При падении — не продолжать, на ПК `migrate-pc.ps1 -Step resume`. Сервисы VPS работали на пустой БД и могли записать служебные строки (оповещения, расписание): если `restore` отказывает из-за строк данных, проверить `out/counts-vps-before.txt` — при отсутствии данных участников повторить с `FORCE_RESTORE=1 bash deploy/migrate-vps.sh restore`.
+- [ ] T030 [US2] [Ч] `[VPS]` Сверка — точка невозврата: `migrate-vps.sh verify`. Пустой `diff out/counts-pc.txt out/counts-vps.txt` создаёт `out/verify-ok` (SC-02, количества), версии — в `out/versions-vps.txt`. Версия pgvector на VPS не ниже ПК (research R7). При расхождении — `migrate-pc.ps1 -Step resume`, ПК остаётся рабочим контуром.
+- [ ] T031 [US2] [Ч] `[VPS]` Запуск сервисов (`cutover` → `vps`): `migrate-vps.sh start` (требует `out/verify-ok`) — bot, vk-adapter, miniapp-gateway Up. `indexer-daemon` пока не запускается (T035). Прежний запуск 2026-11-25 был на пустой БД и остановлен в P4, поэтому задача снова открыта.
+- [ ] T032 [US2] [Ч] `[ПК]` Зафиксировать контур: `migrate-pc.ps1 -Step finalize` — стоп `db`, `docker update --restart=no` всех контейнеров проекта. Время переключения — в acceptance.md («Площадка»). Том `ecoprofi_db-data` хранится не меньше 14 дней. **После этого на ПК не выполняются команды индексатора** (включая `status`).
+- [ ] T033 [US2] [Ч] `[VPS]` Новый вход оператора — **выполняет оператор сам** в интерактивном терминале (ввод скрытый, Claude его выполнить не может): `ssh -t root@79.174.78.44 "cd /opt/ecoprofi && bash deploy/migrate-vps.sh login"`. Открыть выданный адрес VK ID у себя в браузере, адрес `https://localhost/callback?...` вставить обратно. Том `indexer-secrets` с ПК не копировать.
+- [ ] T034 [US2] [Ч] `[VPS]` Разовая проверка чтения на сервере (OPS-01): расписание, платная лента, документ, дорожка — командами индексатора из `specs/003-autonomous-indexer/quickstart.md` с префиксом `docker compose -f compose.yaml -f compose.vps.yaml --profile indexer run --rm indexer`. Записать исходы в acceptance.md. Отказ доступа, пустой ответ, сетевой сбой и ошибка разбора должны различаться (NET-01).
+- [ ] T035 [US2] [Ч] `[VPS]` Плановый режим: `migrate-vps.sh daemon` — запуск `indexer-daemon` и `indexer status`. Следующий проход назначен на 07:00 или 19:00 МСК, активный проход один.
+- [ ] T036 [US2] [Ч] Оповещения с VPS: тестовое или реальное оповещение по `specs/003-autonomous-indexer/contracts/alerts.md` дошло оператору (`ALERT_VK_USER_ID`). Записать в acceptance.md.
 
 **Checkpoint:** VPS — единственный рабочий контур, данные сверены, индексатор работает по расписанию.
 
@@ -238,7 +259,7 @@ Task: "T025 Test-NetConnection 22/80/443 открыты, 5432/8000/8080 закр
 | T022 | ✅ | БД healthy, роли через db/init/01_roles.sql |
 | Migrations | ✅ | 001_pilot.sql, 002_documents.sql, 003_autonomy.sql, 004_miniapp.sql |
 | T018/T024 | ✅ | SSL certbot, renew --dry-run успешен |
-| T031 | ✅ | bot, db, indexer-daemon, vk-adapter, miniapp-gateway — все Up (на пустой БД) |
+| T031 | ⏳ | сервисы поднимались на пустой БД; повторный запуск — `migrate-vps.sh start` после переноса |
 | T036 | ⏳ | требуется проверка доставки оповещений оператору |
 
 **Сервисы (2026-11-25 08:45 MSK):**
@@ -252,6 +273,6 @@ Task: "T025 Test-NetConnection 22/80/443 открыты, 5432/8000/8080 закр
 | miniapp-gateway | ✅ Up | 80, 443, 8080 |
 | HTTPS | ✅ 200 OK | miniapp.bot-alimony.ru |
 
-**Невыполненные задачи:** T008 (DNSSEC), T010–T011 (пользователь deploy, hardening SSH), T013 (ufw), T015 (daemon.json — DNS исправлен, но сеть из контейнеров не работает), T016 (проверка исхода), T020 (compose config -t), T021 (pytest), T023 (вход из сетей), T025 (внешняя поверхность), T026–T035 (перенос данных — не выполнялся, БД на VPS пустая), T037–T040 (живая матрица), T046–T055 (копии, оповещения, наблюдение, приёмка).
+**Невыполненные задачи:** T008 (DNSSEC), T010–T011 (пользователь deploy, hardening SSH), T013 (ufw), T015 (daemon.json — DNS исправлен, но сеть из контейнеров не работает), T016 (проверка исхода), T020 (compose config -t), T021 (pytest), T023 (вход из сетей), T025 (внешняя поверхность), T026–T035 (перенос данных — подготовлен скриптами, не выполнялся, БД на VPS пустая), T037–T040 (живая матрица), T046–T055 (копии, оповещения, наблюдение, приёмка).
 
-**Переход:** после выполнения T008 → T009 уже выполнен → Phase 4 (перенос данных).
+**Переход:** Phase 4 (перенос данных) — по разделу «Порядок переноса скриптами»: P0–P5, затем T026–T036 на ПК со стендом.
