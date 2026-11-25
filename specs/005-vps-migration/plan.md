@@ -10,8 +10,23 @@
 Весь стенд (db, bot, vk-adapter, indexer-daemon, miniapp-gateway) переносится на VPS в российском ЦОД без изменения кода приложения и схемы БД. Меняется только развёртывание:
 
 - **Вход.** A-запись `miniapp.bot-alimony.ru` в зоне REG.RU → IPv4 VPS. TLS заканчивается на существующем шлюзе nginx: оверлей `compose.vps.yaml` и конфиг `deploy/vps/miniapp-nginx.conf` с сертификатом Let's Encrypt и тем же allowlist `miniapp-server.inc`. Cloudflare и профиль `tunnel` исключены.
+- **Сборка и загрузка.** Образы собираются локально (где сеть к PyPI/Debian работает) и загружаются на VPS через `docker save/load` единым скриптом `deploy/vps-deploy.py`. Прямая сборка на VPS не возможна из-за сетевых ограничений провайдера (OpenStack internal DNS не резолвит внешние репозитории из контейнеров).
 - **Данные.** Снимок `pg_dump -Fc` при остановленных писателях ПК, контрольная сумма, восстановление и сверка `deploy/table-counts.sql`. Переключение выполняется в одном окне и оставляет ПК готовым к возврату.
 - **Эксплуатация.** systemd-таймер ночной копии в S3 с пробным восстановлением. Новый вход оператора на сервере. Защита хоста: SSH по ключу, ufw, fail2ban, unattended-upgrades. Оповещения о сертификате и сбое копии идут через существующую очередь `alert` (research R10).
+
+## Фактический деплой (2026-11-25)
+
+| Параметр | Значение |
+| --- | --- |
+| VPS | 2 vCPU AMD EPYC-Milan, 2 ГБ RAM + 2 ГБ swap, 20 ГБ NVMe |
+| ОС | Ubuntu Server 24.04 LTS |
+| IP | 79.174.78.44 |
+| Способ доставки образов | Локальная сборка → `docker save` → SFTP → `docker load` |
+| Базовый образ indexer | `python:3.12-slim` (tesseract недоступен в Alpine) |
+| Создание ролей БД | `db/init/01_roles.sql` (pgvector не запускает `.sh` из `initdb.d`) |
+| SSL | certbot, системный nginx остановлен, порты 80/443 → Docker |
+| Сервисы | bot, db, indexer-daemon, vk-adapter, miniapp-gateway — все Up |
+| HTTPS | miniapp.bot-alimony.ru → 200 OK |
 
 ## Technical Context
 
@@ -21,10 +36,10 @@
 | Зависимости | Docker Engine и плагин Compose из официального репозитория Docker; nginx 1.29.3-alpine (образ шлюза); certbot (apt); rclone (apt); systemd |
 | Данные | PostgreSQL 16 + pgvector (`pgvector/pgvector:pg16`), том `db-data` на VPS. Миграций нет. Ночные копии в S3-совместимом хранилище провайдера |
 | Проверки | `docker compose --profile test run --rm tests` (pytest на test-db) на VPS (T021); `nginx -t` и `compose config -q` (T020); остальное — эксплуатационные пробы по quickstart с записью в acceptance.md |
-| Платформа | VPS KVM x86_64, Ubuntu Server 24.04 LTS, Москва или СПб, статический IPv4. Рекомендуется 4 vCPU / 8 ГБ / 80 ГБ NVMe + 2 ГБ swap, минимум 2 / 4 / 40 |
+| Платформа | VPS KVM x86_64, Ubuntu Server 24.04 LTS, Москва или СПб, статический IPv4. Рекомендуется 4 vCPU / 8 ГБ / 80 ГБ NVMe + 2 ГБ swap, минимум 2 / 4 / 40. Факт: 2 vCPU / 2 ГБ + 2 ГБ swap / 20 ГБ |
 | Тип проекта | Перенос развёртывания веб-сервиса: Compose-оверлей, конфиг шлюза, хостовые скрипты и юниты, документация |
 | Цели | TTFB `GET /` ≤ 1 с из сетей участников (SC-01). Поднятие после reboot ≤ 3 мин (SC-04). Окно переключения около 1 ч вне 07:00 и 19:00 МСК |
-| Ограничения | Наружу только 22/80/443. Секреты только по SSH, права 600. Один рабочий контур. Без Cloudflare. Без изменений кода и схемы. Ресурсы под ASR не закладываются |
+| Ограничения | Наружу только 22/80/443. Секреты только по SSH, права 600. Один рабочий контур. Без Cloudflare. Без изменений кода и схемы. Ресурсы под ASR не закладываются. Образы собираются локально (сеть из Docker-контейнеров на VPS не резолвит внешние репозитории) |
 | Масштаб | Текущий стенд: два участника пилота Mini App, каталог цикла, БД в единицы ГБ (уточняет T006). Хранение копий: 7 ежедневных и 4 еженедельных |
 
 Неизвестных `NEEDS CLARIFICATION` нет. Провайдера выбирает владелец по критериям research R1. Без этого выбора нельзя начать T007, но проектирование от него не зависит.
@@ -81,17 +96,19 @@ specs/005-vps-migration/
 ```text
 compose.vps.yaml                         # есть (T001): 80/443, монтирование конфига и сертификатов
 deploy/vps/miniapp-nginx.conf            # есть (T002)
+deploy/vps-deploy.py                     # единый скрипт деплоя: build + docker save/load + SSH
+db/init/01_roles.sql                     # создание ролей БД (T022, pgvector не запускает .sh)
 deploy/backup.sh                         # есть (T003); дополнить: close backup последним шагом
 deploy/systemd/ecoprofi-backup.service   # есть (T003); дополнить: OnFailure=ecoprofi-alert-backup.service
 deploy/systemd/ecoprofi-backup.timer     # есть (T003)
 deploy/table-counts.sql                  # есть (T004)
-deploy/host-alert.sh                     # новый: open|close tls|backup (contracts/host-alerts.md)
-deploy/cert-check.sh                     # новый: openssl -checkend, CERT_WARN_DAYS=14
-deploy/systemd/ecoprofi-cert-check.{service,timer}   # новый: ежедневно 09:00 МСК
-deploy/systemd/ecoprofi-alert-backup.service         # новый: oneshot host-alert.sh open backup
+deploy/host-alert.sh                     # есть (T041): open|close tls|backup (contracts/host-alerts.md)
+deploy/cert-check.sh                     # есть (T042): openssl -checkend, CERT_WARN_DAYS=14
+deploy/systemd/ecoprofi-cert-check.{service,timer}   # есть (T043): ежедневно 09:00 МСК
+deploy/systemd/ecoprofi-alert-backup.service         # есть (T043): oneshot host-alert.sh open backup
 ```
 
-**Решение о структуре:** код приложения (`ecoprofi/`, `mini-app/`, `migrations/`) и `compose.yaml` не меняются. Все изменения находятся в `deploy/`, `compose.vps.yaml` и документации. Файлы для ПК (`deploy/miniapp-nginx.conf`, `miniapp-realip.inc`, профиль `tunnel`) сохраняются: они нужны для возврата.
+**Решение о структуре:** код приложения (`ecoprofi/`, `mini-app/`, `migrations/`) и `compose.yaml` не меняются. Все изменения находятся в `deploy/`, `compose.vps.yaml`, `db/init/` и документации. Файлы для ПК (`deploy/miniapp-nginx.conf`, `miniapp-realip.inc`, профиль `tunnel`) сохраняются: они нужны для возврата.
 
 ## Учёт в tasks.md
 

@@ -14,6 +14,7 @@ echo 'alias dc="docker compose -f /opt/ecoprofi/compose.yaml -f /opt/ecoprofi/co
 
 | Сценарий | Предусловие | Проверка | Ожидание | Критерий |
 | --- | --- | --- | --- | --- |
+| Единый деплой | Python 3.10+, Docker, paramiko | `python deploy/vps-deploy.py --host <IP> --password <PASS>` | Все сервисы Up, HTTPS 200, SSL валиден | Деплой |
 | Вход из сетей | DNS → IP VPS, сертификат выпущен | `curl.exe -sSI https://miniapp.bot-alimony.ru/` с ПК и открытие с телефона в 3 мобильных сетях и 1 домашней | 200, CSP `frame-ancestors` VK, HSTS, TTFB ≤ 1 с | SC-01 |
 | Данные без потерь | Восстановлен снимок переноса | раздел «Сверка количеств» и 4 контрольных вопроса | пустой `diff`, те же источники | SC-02 |
 | Mini App с сервера | Сервисы VPS запущены | матрица 004 на телефоне и ПК (T038–T040) | как на локальном стенде | SC-03 |
@@ -24,13 +25,46 @@ echo 'alias dc="docker compose -f /opt/ecoprofi/compose.yaml -f /opt/ecoprofi/co
 | Поверхность и секреты | Стенд работает | `Test-NetConnection <IP> -Port 5432/8000/8080/22/80/443`, `dc logs \| grep -Ei "sign=\|token\|secret\|bearer\|password"` | открыты только 22/80/443, реальных значений в логах нет | SC-08 |
 | Оповещения хоста | Юниты `cert-check` и `backup` установлены | раздел «Оповещения хоста» | сообщения об открытии и восстановлении дошли оператору | граничный случай «сертификат», FR-09 |
 
+## Единый деплой
+
+**Требования:** Python 3.10+, Docker, `pip install paramiko`.
+
+**Использование:**
+```bash
+python deploy/vps-deploy.py --host 79.174.78.44 --password <VPS_PASSWORD>
+```
+
+**Или через переменные окружения:**
+```bash
+export VPS_HOST=79.174.78.44 VPS_USER=root VPS_PASSWORD=...
+python deploy/vps-deploy.py
+```
+
+**Шаги скрипта:**
+1. Локальная сборка: `docker build --target <target> -t <tag> .` (app, indexer, miniapp-gateway)
+2. `docker save -o images.tar <tags>`
+3. SFTP upload проекта и images.tar на VPS
+4. `docker load < images.tar`
+5. `systemctl stop nginx && systemctl disable nginx` (освободить порты 80/443)
+6. `docker compose up -d --force-recreate`
+7. Ждём БД healthy
+8. Создание ролей БД через `db/init/01_roles.sql`
+9. Миграции: `docker compose run --rm bot python -m ecoprofi.bot.migrate`
+10. Перезапуск сервисов
+11. Certbot: `certbot --nginx -d <domain>`
+12. Финальная проверка: docker compose ps, HTTPS, логи сервисов
+
+**Примечание:** образы собираются локально, так как сеть из Docker-контейнеров на VPS не резолвит внешние репозитории (OpenStack internal DNS).
+
 ## Файлы развёртывания
 
 | Файл | Назначение |
 | --- | --- |
 | `compose.vps.yaml` | Оверлей: шлюз публикует 80/443, монтирует сертификаты и VPS-конфиг nginx |
 | `deploy/vps/miniapp-nginx.conf` | 80 → ACME и 301; 443 → TLS Let's Encrypt и allowlist `miniapp-server.inc`; 8080 → диагностика на 127.0.0.1 |
+| `deploy/vps-deploy.py` | **Единый скрипт деплоя:** build локально → docker save → SFTP → docker load → roles → migrate → up → certbot |
 | `deploy/backup.sh` | Дамп → проверка `pg_restore --list` → sha256 → S3 daily/weekly → ротация |
+| `db/init/01_roles.sql` | Создание ролей БД (pgvector не запускает `.sh` из `initdb.d`) |
 | `deploy/systemd/ecoprofi-backup.{service,timer}` | Запуск копии ежедневно в 03:30 МСК; при сбое — `ecoprofi-alert-backup.service` (оповещение `backup`) |
 | `deploy/host-alert.sh` | Открыть или закрыть оповещение хоста `tls` / `backup` в очереди `alert` ([contracts/host-alerts.md](contracts/host-alerts.md)) |
 | `deploy/cert-check.sh` | Срок сертификата: меньше `CERT_WARN_DAYS` (14) дней — открыть `tls`, иначе закрыть |
