@@ -264,14 +264,14 @@ Task: "T025 Test-NetConnection 22/80/443 открыты, 5432/8000/8080 закр
 
 **Сервисы (2026-11-25 13:19 MSK, после переноса):**
 
-| Сервис | Статус | Порт |
-| --- | --- | --- |
+| Сервис | Статус                    | Порт |
+| --- |---------------------------| --- |
 | bot | ✅ Up (перенесённые данные) | 8000 (internal) |
-| db (pgvector) | ✅ healthy | 5432 (internal) |
-| indexer-daemon | ✅ Up | internal |
-| vk-adapter | ✅ Up | internal |
-| miniapp-gateway | ✅ Up | 80, 443, 8080 |
-| HTTPS | ✅ 200 OK | miniapp.bot-alimony.ru |
+| db (pgvector) | ✅ healthy                 | 5432 (internal) |
+| indexer-daemon | ✅ Up                      | internal |
+| vk-adapter | ✅ Up                      | internal |
+| miniapp-gateway | ✅ Up                      | 80, 443, 8080 |
+| HTTPS | ✅ 200 OK                  | miniapp.bot-alimony.ru |
 
 **Невыполненные задачи:** T008 (DNSSEC), T010–T011 (пользователь deploy, hardening SSH), T013 (ufw), T015 (daemon.json — DNS исправлен, но сеть из контейнеров не работает), T016 (проверка исхода), T020 (compose config -t), T021 (pytest), T023 (вход из сетей), T025 (внешняя поверхность), T034 (проверка чтения на сервере), T036 (оповещения), T037–T040 (живая матрица), T046–T055 (копии, оповещения, наблюдение, приёмка).
 
