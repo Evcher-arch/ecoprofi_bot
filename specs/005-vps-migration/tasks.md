@@ -6,7 +6,7 @@ description: "Задачи 005: перенос стенда на VPS"
 
 **Вход:** [spec.md](spec.md), [plan.md](plan.md), [research.md](research.md), [data-model.md](data-model.md), [contracts/](contracts/), [quickstart.md](quickstart.md).
 
-**Дата:** 2026-11-24 (перестроено по plan.md, нумерация изменена). **Статус:** 20/55. Подготовка репозитория T001–T005 и скрипты оповещений хоста T041–T044 выполнены (2026-11-24). Единый скрипт деплоя deploy/vps-deploy.py создан (2026-11-25). Фактический деплой на VPS 79.174.78.44 выполнен 2026-11-25: образы собраны локально, загружены через docker save/load, роли БД созданы через db/init/01_roles.sql, миграции применены, SSL-сертификат выпущен, все 5 сервисов работают (bot, db, indexer-daemon, vk-adapter, miniapp-gateway). HTTPS miniapp.bot-alimony.ru → 200 OK.
+**Дата:** 2026-11-24 (перестроено по plan.md, нумерация изменена). **Статус:** 21/55. Подготовка репозитория T001–T005 и скрипты оповещений хоста T041–T044 выполнены (2026-11-24). Единый скрипт деплоя deploy/vps-deploy.py создан (2026-11-25). Фактический деплой на VPS 79.174.78.44 выполнен 2026-11-25: образы собраны локально, загружены через docker save/load, роли БД созданы через db/init/01_roles.sql, миграции применены, SSL-сертификат выпущен, все 5 сервисов работают (bot, db, indexer-daemon, vk-adapter, miniapp-gateway). HTTPS miniapp.bot-alimony.ru → 200 OK.
 
 **Обозначения.** `[P]` — можно выполнять параллельно с соседними задачами (другие файлы или другая площадка, нет зависимости от незавершённых задач). `[US1]`–`[US3]` — история spec.md. **[Ч]** — выполняет человек (владелец или оператор) по шагам. **[Р]** — изменение репозитория, выполняет разработчик или Claude. `[ПК]` — PowerShell на текущем ПК из папки проекта. `[VPS]` — bash на сервере под пользователем `deploy` в `/opt/ecoprofi`. `dc` — alias из quickstart: `docker compose -f compose.yaml -f compose.vps.yaml --profile miniapp --profile daemon`. Результат каждой задачи **[Ч]** записывается в `specs/005-vps-migration/acceptance.md`: дата, факт, отклонения. Секреты в протокол не вносятся.
 
@@ -21,7 +21,7 @@ description: "Задачи 005: перенос стенда на VPS"
 - [x] T003 [Р] `deploy/backup.sh`: `pg_dump -Fc` → проверка `pg_restore --list` → sha256 → rclone в S3 `daily/` и `weekly/` (воскресенье) → ротация 7 дней и 4 недели, локально 3 копии. При ошибке ненулевой код возврата. Unit-файлы `deploy/systemd/ecoprofi-backup.{service,timer}` на 03:30 МСК.
 - [x] T004 [P] [Р] `deploy/table-counts.sql`: точные количества строк всех таблиц `public` (через `query_to_xml`) и список `schema_migrations`.
 - [x] T005 [Р] `specs/005-vps-migration/quickstart.md` с командами и `acceptance.md` с пустой матрицей. Коммит в `master`. Push выполняется до T017.
-- [ ] T006 [Ч] `[ПК]` Снять фактическое потребление для сайзинга: `docker stats --no-stream`, `docker system df -v`, размер БД `docker compose exec -T db psql -U ecoprofi_owner -d ecoprofi -tAc "SELECT pg_size_pretty(pg_database_size('ecoprofi'));"`. Записать в `specs/005-vps-migration/acceptance.md` («Площадка»). Если том БД больше 10 ГБ, диск берётся не меньше 5-кратного объёма тома плюс 30 ГБ (spec.md, «Сайзинг»).
+- [x] T006 [Ч] `[ПК]` Снять фактическое потребление для сайзинга: `docker stats --no-stream`, `docker system df -v`, размер БД `docker compose exec -T db psql -U ecoprofi_owner -d ecoprofi -tAc "SELECT pg_size_pretty(pg_database_size('ecoprofi'));"`. Записать в `specs/005-vps-migration/acceptance.md` («Площадка»). Если том БД больше 10 ГБ, диск берётся не меньше 5-кратного объёма тома плюс 30 ГБ (spec.md, «Сайзинг»). Выполнено 2026-11-24: см. `Фактическое потребление.txt` — bot ~1 ГБ RAM, всего ~1,1 ГБ, БД 72 МБ (том 159 МБ).
 
 **Checkpoint:** репозиторий содержит файлы развёртывания, тариф выбран.
 
@@ -41,7 +41,7 @@ description: "Задачи 005: перенос стенда на VPS"
 - [x] T012 [Ч] `[VPS]` Обновления, время, swap, fail2ban: `apt full-upgrade`, `unattended-upgrades`, timezone Europe/Moscow, swap 2G, fail2ban.
 - [ ] T013 [Ч] `[VPS]` Брандмауэр ufw — не выполнен.
 - [x] T014 [Ч] `[VPS]` Docker из официального репозитория: docker-ce, docker-compose-plugin.
-- [ ] T015 [Ч] `[VPS]` `/etc/docker/daemon.json` — DNS исправлен на 8.8.8.8, но сеть из Docker-контейнеров к PyPI/Debian не резолвит (OpenStack internal). Решено локальной сборкой образов.
+- [ ] T015 [Ч] `[VPS]` `/etc/docker/daemon.json` — DNS исправлен на 8.8.8.8, но сеть из Docker-контейнеров к PyPI/Debian не резолвит (OpenStack internal). Обойдено без реестра: `deploy/vps-deploy.py` собирает образы на ПК и переносит их через `docker save`/SFTP/`docker load`. Версии образов не хранятся, откат — пересборкой нужного коммита. Задача открыта: `daemon.json` и путь к реестру не настроены.
 - [ ] T016 [P] [Ч] `[VPS]` Исходящий доступ — не проверялся, записан в acceptance.md.
 - [x] T017 [Ч] `[VPS]` Получить код в `/opt/ecoprofi`: git clone по SSH, коммит совпадает с последним push.
 - [x] T018 [Ч] `[VPS]` Выпустить сертификат: `certbot --nginx -d miniapp.bot-alimony.ru` выпущен. Системный nginx остановлен.
@@ -81,7 +81,7 @@ description: "Задачи 005: перенос стенда на VPS"
 - [ ] T028 [US2] [Ч] Передача дампа на VPS — не выполнялась.
 - [ ] T029 [US2] [Ч] `[VPS]` Восстановление в БД — не выполнялось.
 - [ ] T030 [US2] [Ч] `[VPS]` Сверка — не выполнялась.
-- [ ] T031 [US2] [Ч] `[VPS]` Запуск сервисов — **выполнен вручную** 2026-11-25: bot, vk-adapter, miniapp-gateway, indexer-daemon, db — все Up.
+- [x] T031 [US2] [Ч] `[VPS]` Запуск сервисов — **выполнен вручную** 2026-11-25: bot, vk-adapter, miniapp-gateway, indexer-daemon, db — все Up. Отклонение: запуск на пустой БД, перенос данных (T026–T030) не выполнялся.
 - [ ] T032 [US2] [Ч] `[ПК]` Зафиксировать контур — не выполнялся.
 - [ ] T033 [US2] [Ч] `[VPS]` Новый вход оператора — не выполнялся.
 - [ ] T034 [US2] [Ч] `[VPS]` Разовая проверка чтения на сервере — не выполнялась.
@@ -228,6 +228,7 @@ Task: "T025 Test-NetConnection 22/80/443 открыты, 5432/8000/8080 закр
 | --- | --- | --- |
 | T001–T005 | ✅ | compose.vps.yaml, nginx.conf, backup.sh, table-counts.sql, quickstart |
 | T041–T045 | ✅ | host-alert.sh, cert-check.sh, systemd юниты |
+| T006 | ✅ | сайзинг ПК: ~1,1 ГБ RAM, БД 72 МБ (`Фактическое потребление.txt`) |
 | T007 | ✅ | VPS 2 vCPU / 2 ГБ + 2 ГБ swap / 20 ГБ, Ubuntu 24.04, IP 79.174.78.44 |
 | T009 | ✅ | DNS на REG.RU, A-запись miniapp → 79.174.78.44 |
 | T012 | ✅ | swap 2G, fail2ban, unattended-upgrades |
@@ -237,7 +238,7 @@ Task: "T025 Test-NetConnection 22/80/443 открыты, 5432/8000/8080 закр
 | T022 | ✅ | БД healthy, роли через db/init/01_roles.sql |
 | Migrations | ✅ | 001_pilot.sql, 002_documents.sql, 003_autonomy.sql, 004_miniapp.sql |
 | T018/T024 | ✅ | SSL certbot, renew --dry-run успешен |
-| T031 | ✅ | bot, db, indexer-daemon, vk-adapter, miniapp-gateway — все Up |
+| T031 | ✅ | bot, db, indexer-daemon, vk-adapter, miniapp-gateway — все Up (на пустой БД) |
 | T036 | ⏳ | требуется проверка доставки оповещений оператору |
 
 **Сервисы (2026-11-25 08:45 MSK):**
@@ -251,6 +252,6 @@ Task: "T025 Test-NetConnection 22/80/443 открыты, 5432/8000/8080 закр
 | miniapp-gateway | ✅ Up | 80, 443, 8080 |
 | HTTPS | ✅ 200 OK | miniapp.bot-alimony.ru |
 
-**Невыполненные задачи:** T006 (сайзинг ПК), T008 (DNSSEC), T010–T011 (пользователь deploy, hardening SSH), T013 (ufw), T015 (daemon.json — DNS исправлен, но сеть из контейнеров не работает), T016 (проверка исхода), T020 (compose config -t), T021 (pytest), T023 (вход из сетей), T025 (внешняя поверхность), T026–T035 (перенос данных — не выполнялся, БД на VPS пустая), T037–T040 (живая матрица), T046–T055 (копии, оповещения, наблюдение, приёмка).
+**Невыполненные задачи:** T008 (DNSSEC), T010–T011 (пользователь deploy, hardening SSH), T013 (ufw), T015 (daemon.json — DNS исправлен, но сеть из контейнеров не работает), T016 (проверка исхода), T020 (compose config -t), T021 (pytest), T023 (вход из сетей), T025 (внешняя поверхность), T026–T035 (перенос данных — не выполнялся, БД на VPS пустая), T037–T040 (живая матрица), T046–T055 (копии, оповещения, наблюдение, приёмка).
 
-**Переход:** после выполнения T006 и T008 → T009 уже выполнен → Phase 4 (перенос данных).
+**Переход:** после выполнения T008 → T009 уже выполнен → Phase 4 (перенос данных).

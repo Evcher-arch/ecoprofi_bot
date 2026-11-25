@@ -10,10 +10,14 @@
   python deploy/vps-deploy.py \\
     --host 79.174.78.44 \\
     --user root \\
-    --password OOrJumGXisV6l3lg \\
+    --password <VPS_PASSWORD> \\
     [--project-dir /path/to/repo] \\
     [--domain miniapp.bot-alimony.ru] \\
     [--email admin@bot-alimony.ru]
+
+  Пароль в репозиторий не записывается. Предпочтительно передавать его через
+  переменную окружения, а не через --password: аргумент остаётся в истории
+  командной оболочки.
 
   Или через переменные окружения:
     export VPS_HOST=79.174.78.44 VPS_USER=root VPS_PASSWORD=...
