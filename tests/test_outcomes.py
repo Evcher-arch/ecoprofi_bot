@@ -102,3 +102,13 @@ def test_card_text_for_each_kind_of_place():
     assert cards._place(letter) == "Письмо от 08.02.2024 № ВЧ-09-03-34/3616"
     assert cards._place({"type": "letter", "requisites": None}) == "Письмо, реквизиты не подтверждены"
     assert cards._place({"type": "material", "material_kind": "video"}) == "Запись целиком"
+
+
+def test_lead_text_omits_listing_when_cards_shown():
+    # Mini App рисует карточки сам: в тексте остаётся только вступление (без дубля перечня).
+    card = {"title": "Лекция 67", "explanation": "Пояснение", "url": "https://vk.com/wall-1_2"}
+    full = cards.message_text("found", [card])
+    assert "Лекция 67" in full
+    assert cards.lead_text("found", [card], full) == cards.FOUND_LEAD
+    assert cards.lead_text("empty", [], cards.EMPTY_TEXT) == cards.EMPTY_TEXT
+    assert cards.lead_text("clarify", [], cards.CLARIFY_TEXT) == cards.CLARIFY_TEXT

@@ -124,6 +124,16 @@ def _place(card: dict) -> str | None:
     return None
 
 
+FOUND_LEAD = "Вот что нашлось в доступных вам материалах:"
+
+
+def lead_text(outcome: str, cards: list[dict], text: str) -> str:
+    """Текст ответа для Mini App: карточки рисуются отдельно, перечень в тексте их дублировал бы."""
+    if outcome == "found" and cards:
+        return FOUND_LEAD
+    return text
+
+
 def message_text(outcome: str, cards: list[dict], options=()) -> str:
     if outcome == "clarify":
         if options:
@@ -131,7 +141,7 @@ def message_text(outcome: str, cards: list[dict], options=()) -> str:
         return CLARIFY_TEXT
     if outcome == "empty" or not cards:
         return EMPTY_TEXT
-    parts = ["Вот что нашлось в доступных вам материалах:"]
+    parts = [FOUND_LEAD]
     for number, card in enumerate(cards, 1):
         lines = [f"{number}. {card['title']}"]
         lecture = card.get("lecture")

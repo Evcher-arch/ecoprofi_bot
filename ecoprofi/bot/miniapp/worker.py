@@ -11,6 +11,7 @@ from psycopg.types.json import Jsonb
 
 from ecoprofi.bot.miniapp import telemetry as mini_telemetry
 from ecoprofi.ai import AIError
+from ecoprofi.bot import cards as cards_module
 from ecoprofi.bot.access import NotSubscribed
 from ecoprofi.bot.club import ClubUnavailable
 from ecoprofi.bot.miniapp import config
@@ -246,7 +247,8 @@ class MiniAppWorker:
                         {"material_id": m, "version_id": v} for m, v in found.provenance.items()] or [])):
                     self.repository._invalidate(conn, row["dialog_id"], row["request_id"])
                     return
-                result = {"outcome": found.outcome, "text": found.text, "cards": found.cards}
+                result = {"outcome": found.outcome, "cards": found.cards,
+                          "text": cards_module.lead_text(found.outcome, found.cards, found.text)}
                 conn.execute("UPDATE miniapp_request SET state = 'completed', outcome = %s, result = %s, "
                              "provenance = %s, finished_at = %s, error_code = NULL WHERE dialog_id = %s AND request_id = %s "
                              "AND state = 'running' AND attempt_id = %s",
