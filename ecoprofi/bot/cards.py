@@ -124,7 +124,7 @@ def _place(card: dict) -> str | None:
     return None
 
 
-FOUND_LEAD = "Вот что нашлось в доступных вам материалах:"
+FOUND_LEAD = "Вот, что нашлось в доступных Вам материалах:"
 
 
 def lead_text(outcome: str, cards: list[dict], text: str) -> str:

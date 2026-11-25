@@ -13,7 +13,7 @@ function send(res, status, body) {
 function answerFor(text) {
   if (text.includes('уточн')) return { outcome: 'clarify', text: 'Уточните, пожалуйста: какая лекция?', cards: [] };
   return {
-    outcome: 'found', text: 'Вот что нашлось в доступных вам материалах:', cards: [{
+    outcome: 'found', text: 'Вот, что нашлось в доступных Вам материалах:', cards: [{
       type: 'episode', material_id: 1, title: 'Контрольная запись', lecture: { title: 'Лекция 1', date: null },
       explanation: 'Синтетическое пояснение', url: 'https://vk.ru/video-1_2?t=1563s',
       excerpt: 'синтетическая выдержка', start_ms: 1563000, end_ms: 1590000,
