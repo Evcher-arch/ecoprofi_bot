@@ -41,10 +41,8 @@ export function useSession() {
           return;
         } catch (error) {
           clearSession();
-          if (error instanceof ApiError && error.status === 401) {
-            if (active) setState({ status: 'expired', session: null, error: error.message });
-            return;
-          }
+          // 401 при resume означает новый запуск (другая подпись) или истёкшую сессию:
+          // не показываем ошибку, а сразу входим по свежим параметрам запуска.
           if (error instanceof ApiError && error.status === 403) throw error;
         }
       }

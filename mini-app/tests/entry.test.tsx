@@ -52,6 +52,25 @@ describe('подтверждённый вход', () => {
       '/api/miniapp/v1/session/resume', expect.objectContaining({ method: 'POST' })));
   });
 
+  it('новый запуск со старой сессией: resume 401 → сразу login без экрана ошибки', async () => {
+    saveSession({ ...session, token: 'old-token' });
+    vi.stubGlobal('fetch', vi.fn((url: RequestInfo | URL) => {
+      const path = String(url);
+      if (path.endsWith('/session/resume')) {
+        return response({ error: { code: 'resume_mismatch', message: 'Откройте приложение заново из VK.' } }, 401);
+      }
+      if (path.endsWith('/history?after_sequence=0&limit=50')) {
+        return response({ dialog_id: session.dialog_id, items: [], next_after_sequence: 0, has_more: false });
+      }
+      return response(session, 201);
+    }));
+    render(<App />);
+    expect(await screen.findByLabelText('Вопрос')).toBeInTheDocument();
+    expect(screen.queryByText(/Откройте приложение заново/)).not.toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith('/api/miniapp/v1/session', expect.objectContaining({ method: 'POST' }));
+    expect(window.sessionStorage.getItem('ecoprofi.miniapp.session.v1')).toContain('test-token');
+  });
+
   it('ошибка допуска не открывает чат', async () => {
     vi.stubGlobal('fetch', vi.fn(() => response({ error: { code: 'not_subscribed', message: 'Нужна подписка' } }, 403)));
     render(<App />);
