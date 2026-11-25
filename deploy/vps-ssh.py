@@ -36,8 +36,16 @@ def connect():
     client = paramiko.SSHClient()
     client.load_system_host_keys()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(host, username=user, password=password, timeout=15,
-                   look_for_keys=password is None, allow_agent=password is None)
+    if password:
+        # Парольный вход: подключаемся через Transport напрямую,
+        # чтобы paramiko не пытался читать ~/.ssh/* (могут быть зашифрованы).
+        transport = paramiko.Transport((host, 22))
+        transport.start_client()
+        transport.auth_password(user, password)
+        client._transport = transport
+    else:
+        client.connect(host, username=user, password=password, timeout=15,
+                       look_for_keys=True, allow_agent=True)
     return client
 
 
