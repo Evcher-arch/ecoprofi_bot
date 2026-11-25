@@ -126,10 +126,11 @@ def test_race_control_valid_clarification_used_once(miniapp):
     b, _ = _ask(miniapp, session, "загрязняющих веществ")
     worker.run_once()
     row = _row(miniapp, b)
-    assert row["state"] == "completed" and row["effective_query"] == "а что и как загрязняющих веществ"
+    # Новое сообщение нашлось само по себе: контекст уточнения к нему не приклеивается.
+    assert row["state"] == "completed" and row["effective_query"] == "загрязняющих веществ"
     # Повтор готового ответа не продвигает контекст второй раз.
     _ask(miniapp, session, "загрязняющих веществ", request_id=b)
-    assert _row(miniapp, b)["effective_query"] == "а что и как загрязняющих веществ"
+    assert _row(miniapp, b)["effective_query"] == "загрязняющих веществ"
 
 
 def test_concurrent_registration_keeps_dependency(miniapp):

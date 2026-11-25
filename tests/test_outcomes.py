@@ -41,6 +41,13 @@ def test_single_lecture_may_fill_all_places():
     assert [c.material_id for c in decision.cards] == [1, 2, 3]
 
 
+def test_single_word_matching_several_materials_gives_best_cards():
+    decision = decide(result([fragment(1, 10, 0.9), fragment(2, 20, 0.5), fragment(3, 30, 0.3), fragment(4, 40, 0.1)],
+                             lexemes=("выброс",)))
+    assert decision.outcome == "found"
+    assert [c.material_id for c in decision.cards] == [1, 2, 3]
+
+
 def test_letter_and_recording_of_one_lecture_are_separate_cards():
     decision = decide(result([fragment(1, 10, 0.9, kind="letter"), fragment(2, 10, 0.8, kind="episode")]))
     assert [c.kind for c in decision.cards] == ["letter", "episode"]

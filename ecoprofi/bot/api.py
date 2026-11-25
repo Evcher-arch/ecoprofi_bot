@@ -19,7 +19,7 @@ from ecoprofi.bot.access import (Forbidden, NotSubscribed, Unauthorized, check_s
                                  visible_versions)
 from ecoprofi.bot.club import ClubUnavailable
 from ecoprofi.bot.runtime import BotRuntime
-from ecoprofi.bot.service import search_answer
+from ecoprofi.bot.service import search_answer, search_in_context
 from ecoprofi.db import connect
 
 MAX_RECHECKS = 3
@@ -100,16 +100,17 @@ def answer(conn, ai, request: SearchRequest, is_member) -> dict:
     search_ms = generation_ms = 0
     versions: dict[int, int] = {}
     if state.first:
-        found = search_answer(
-            conn, ai, state.effective_query,
+        found, effective_query = search_in_context(
+            conn, ai, state.effective_query, state.context,
             lambda: resolve_access(conn, request.group_id, request.peer_id, request.user_id, is_member),
         )
         outcome, cards, versions = found.outcome, found.cards, found.provenance
         tokens = found.metrics["tokens"]
         search_ms = found.metrics["search_ms"]
         generation_ms = found.metrics["generation_ms"]
+        events.set_effective_query(conn, request.group_id, request.event_id, effective_query)
         events.update_context(conn, request.group_id, request.peer_id, request.user_id,
-                              outcome, state.effective_query)
+                              outcome, effective_query)
     else:
         found = search_answer(
             conn, ai, state.effective_query,
@@ -120,9 +121,6 @@ def answer(conn, ai, request: SearchRequest, is_member) -> dict:
         search_ms = found.metrics["search_ms"]
         generation_ms = found.metrics["generation_ms"]
 
-    if state.first:
-        events.update_context(conn, request.group_id, request.peer_id, request.user_id,
-                              outcome, state.effective_query)
     with conn.transaction():
         telemetry.record(
             conn, operation_id, "bot", outcome, event_id=request.event_id, repeat=not state.first,

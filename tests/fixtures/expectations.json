@@ -34,9 +34,9 @@
     },
     {
       "text": "перечень",
-      "kind": "ambiguous",
+      "kind": "single-word",
       "by_role": {
-        "club": {"outcome": "clarify", "cards": 0}
+        "club": {"outcome": "found"}
       }
     },
     {

@@ -17,7 +17,7 @@ from ecoprofi.bot.club import ClubUnavailable
 from ecoprofi.bot.miniapp import config
 from ecoprofi.bot.miniapp.config import ATTEMPT_LIMIT, BUDGET_SECONDS
 from ecoprofi.bot.miniapp.repository import MiniAppRepository
-from ecoprofi.bot.service import search_answer
+from ecoprofi.bot.service import MAX_QUERY, search_in_context
 
 LOCK_ID = 827450
 log = logging.getLogger("ecoprofi.bot.miniapp.worker")
@@ -167,16 +167,17 @@ class MiniAppWorker:
             self.repository.access(row["user_id"])
             with self.repository.connect() as conn:
                 with conn.transaction():
-                    question = self._question(conn, row, attempt_id)
-            if question is None:
+                    prepared = self._question(conn, row, attempt_id)
+            if prepared is None:
                 self._record(row, "invalidated", started, error_code="source_invalidated")
                 return
+            text, context = prepared
             with self.repository.connect() as conn:
                 # SQL statement timeout ограничен остатком бюджета; сеть AI — BudgetAI.
                 conn.execute("SELECT set_config('statement_timeout', %s, false)",
                              (f"{max(100, int(deadline.remaining() * 1000))}ms",))
-                found = search_answer(conn, BudgetAI(self.ai, deadline), question,
-                                      lambda: self.repository.access(row["user_id"]), deadline=deadline)
+                found, question = search_in_context(conn, BudgetAI(self.ai, deadline), text, context,
+                                                    lambda: self.repository.access(row["user_id"]), deadline=deadline)
             self._complete(row, attempt_id, found, deadline, question, started)
         except NotSubscribed:
             self._fail(row, attempt_id, "denied", "not_subscribed", started)
@@ -214,16 +215,15 @@ class MiniAppWorker:
             self.repository._invalidate(conn, row["dialog_id"], row["request_id"])
             return None
         if row["effective_query"]:
-            return row["effective_query"]
-        question = " ".join(row["original_text"].split())
+            return row["effective_query"], None
+        question = " ".join(row["original_text"].split())[-MAX_QUERY:]
+        context = None
         if row["context_request_id"]:
             dependency = conn.execute("SELECT effective_query FROM miniapp_request WHERE dialog_id = %s AND request_id = %s",
                                       (row["dialog_id"], row["context_request_id"])).fetchone()
-            question = f"{dependency['effective_query']} {question}"
-        question = question[-2000:]
-        conn.execute("UPDATE miniapp_request SET effective_query = %s WHERE dialog_id = %s AND request_id = %s",
-                     (question, row["dialog_id"], row["request_id"]))
-        return question
+            context = dependency["effective_query"] if dependency else None
+        # Итоговый запрос (с контекстом или без) записывается вместе с ответом в _complete.
+        return question, context
 
     def _complete(self, row, attempt_id, found, deadline, question, started):
         with self.repository.connect() as conn:
@@ -250,11 +250,11 @@ class MiniAppWorker:
                 result = {"outcome": found.outcome, "cards": found.cards,
                           "text": cards_module.lead_text(found.outcome, found.cards, found.text)}
                 conn.execute("UPDATE miniapp_request SET state = 'completed', outcome = %s, result = %s, "
-                             "provenance = %s, finished_at = %s, error_code = NULL WHERE dialog_id = %s AND request_id = %s "
-                             "AND state = 'running' AND attempt_id = %s",
+                             "provenance = %s, finished_at = %s, error_code = NULL, effective_query = %s "
+                             "WHERE dialog_id = %s AND request_id = %s AND state = 'running' AND attempt_id = %s",
                              (found.outcome, Jsonb(result),
                               Jsonb([{"material_id": m, "version_id": v} for m, v in found.provenance.items()]),
-                              config.utcnow(), row["dialog_id"], row["request_id"], attempt_id))
+                              config.utcnow(), question, row["dialog_id"], row["request_id"], attempt_id))
                 if found.outcome == "clarify":
                     conn.execute("UPDATE miniapp_dialog SET pending_query = %s, pending_request_id = %s WHERE id = %s",
                                  (question, row["request_id"], row["dialog_id"]))

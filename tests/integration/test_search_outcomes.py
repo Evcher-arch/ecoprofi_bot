@@ -66,38 +66,55 @@ def test_navigation_card_counts_towards_limit_of_three(loaded):
 
 def test_clarification_continues_own_dialog_and_finds_episode(subscribers):
     loaded = subscribers
-    first = loaded.ask("public", "перечень")
+    first = loaded.ask("public", "а что и как")
     assert first["outcome"] == "clarify" and first["cards"] == []
-    assert pending(loaded, "public") == "перечень"
+    assert pending(loaded, "public") == "а что и как"
     second = loaded.ask("public", "для атмосферного воздуха")
     assert second["outcome"] == "found"
-    assert loaded.keys(second)[0] == "same_title_public"
+    assert "same_title_public" in loaded.keys(second)
     assert pending(loaded, "public") is None
+
+
+def test_new_question_after_clarification_is_searched_on_its_own(subscribers):
+    """Самостоятельный новый вопрос после уточнения не склеивается с прежним."""
+    loaded = subscribers
+    loaded.ask("public", "а что и как", event_id="n1")
+    loaded.ask("public", "атмосферного воздуха", event_id="n2")
+    effective = loaded.owner.execute("SELECT effective_query FROM event WHERE event_id = 'n2'").fetchone()
+    assert effective["effective_query"] == "атмосферного воздуха"
+
+
+def test_failed_clarifications_do_not_accumulate(subscribers):
+    """Два неудачных уточнения подряд: контекстом остаётся только последнее сообщение."""
+    loaded = subscribers
+    loaded.ask("public", "а что и как")
+    assert loaded.ask("public", "и как же так")["outcome"] == "clarify"
+    assert pending(loaded, "public") == "и как же так"
 
 
 def test_two_simultaneous_clarifications_stay_isolated(subscribers):
     loaded = subscribers
-    loaded.ask("public", "перечень")
-    loaded.ask("unknown", "веществ")
-    assert pending(loaded, "public") == "перечень"
-    assert pending(loaded, "unknown") == "веществ"
+    loaded.ask("public", "а что и как")
+    loaded.ask("unknown", "и как же так")
+    assert pending(loaded, "public") == "а что и как"
+    assert pending(loaded, "unknown") == "и как же так"
     answer = loaded.ask("unknown", "допустимую концентрацию")
     assert loaded.keys(answer) == ["lecture_public"]
-    assert pending(loaded, "public") == "перечень"          # чужой контекст не тронут
+    assert pending(loaded, "public") == "а что и как"       # чужой контекст не тронут
     answer = loaded.ask("public", "атмосферного воздуха")
-    assert loaded.keys(answer)[0] == "same_title_public"
+    assert "same_title_public" in loaded.keys(answer)
 
 
 def test_repeated_event_does_not_advance_clarification_twice(subscribers):
     loaded = subscribers
-    loaded.ask("public", "перечень", event_id="c1")
-    loaded.ask("public", "перечень", event_id="c1")
-    assert pending(loaded, "public") == "перечень"
+    loaded.ask("public", "а что и как", event_id="c1")
+    loaded.ask("public", "а что и как", event_id="c1")
+    assert pending(loaded, "public") == "а что и как"
     loaded.ask("public", "атмосферного воздуха", event_id="c2")
     repeat = loaded.ask("public", "атмосферного воздуха", event_id="c2")
     assert repeat["outcome"] == "found"
     effective = loaded.owner.execute("SELECT effective_query FROM event WHERE event_id = 'c2'").fetchone()
-    assert effective["effective_query"] == "перечень атмосферного воздуха"
+    assert effective["effective_query"] == "атмосферного воздуха"
 
 
 def test_role_change_between_clarification_turns(loaded):

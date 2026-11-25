@@ -114,9 +114,8 @@ def decide(result: SearchResult) -> Decision:
     ordered = [c for c in fragments if c.by_number] + numbered + ranked + navigation
     if ordered:
         if not result.numbered:
-            # Одно слово, подходящее сразу нескольким материалам, не определяет тему.
-            if len(result.lexemes) == 1 and len(ordered) > 1:
-                return Decision("clarify")
+            # Однословный вопрос, подтверждённый в нескольких материалах, получает лучшие
+            # карточки; уточнение — только когда подтверждённые лекции неразличимы по рангу.
             options = _too_many_close_lectures(ranked, _threshold("SEARCH_LECTURE_CLOSE", LECTURE_CLOSE))
             if options:
                 provenance = {c.material_id: c.version_id for c in ranked if c.lecture_title or c.title}

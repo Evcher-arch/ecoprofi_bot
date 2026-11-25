@@ -22,6 +22,28 @@ class SearchOutcome:
     metrics: dict[str, int] = field(default_factory=dict)
 
 
+MAX_QUERY = 2000
+
+
+def search_in_context(conn, ai, text: str, context: str | None, check_access: Callable, *,
+                      deadline=None) -> tuple[SearchOutcome, str]:
+    """Поиск ответа на уточнение. Возвращает исход и запрос, по которому он получен.
+
+    Сначала ищется само новое сообщение: если оно находит материалы, это новый вопрос,
+    и контекст прежнего уточнения не нужен. Иначе ищется продолжение прежнего вопроса.
+    Если не помогло и оно, следующим контекстом становится только новое сообщение —
+    так неудачные вопросы не склеиваются в бесконечную цепочку.
+    """
+    alone = search_answer(conn, ai, text, check_access, deadline=deadline)
+    if not context or alone.outcome == "found":
+        return alone, text
+    combined_query = f"{context} {text}"[-MAX_QUERY:]
+    combined = search_answer(conn, ai, combined_query, check_access, deadline=deadline)
+    if combined.outcome == "found":
+        return combined, combined_query
+    return alone, text
+
+
 def search_answer(conn, ai, question: str, check_access: Callable, *, deadline=None) -> SearchOutcome:
     """Проверять допуск до поиска, перед генерацией и перед выдачей.
 
