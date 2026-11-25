@@ -52,6 +52,44 @@ describe('восстановление UI', () => {
     await waitFor(() => expect(history).toHaveBeenCalledTimes(2));
   });
 
+  it('короткий уход с вкладки: диалог остаётся на экране во время фоновой проверки', async () => {
+    const answered = { ...empty, items: [item('completed', { question: 'Сохранённый вопрос' })] };
+    let release: (value: typeof answered) => void = () => {};
+    const history = vi.spyOn(api, 'history')
+      .mockResolvedValueOnce(answered)
+      .mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    render(<Chat session={session} />);
+    expect(await screen.findByText('Сохранённый вопрос')).toBeInTheDocument();
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    hidden.mockReturnValue(false);
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    await waitFor(() => expect(history).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('Сохранённый вопрос')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Загрузка истории')).not.toBeInTheDocument();
+    await act(async () => { release(answered); });
+    expect(screen.getByText('Сохранённый вопрос')).toBeInTheDocument();
+    hidden.mockRestore();
+  });
+
+  it('долгий уход с вкладки скрывает прежнюю выдачу до проверки', async () => {
+    const answered = { ...empty, items: [item('completed', { question: 'Сохранённый вопрос' })] };
+    vi.spyOn(api, 'history')
+      .mockResolvedValueOnce(answered)
+      .mockImplementationOnce(() => new Promise(() => {}));
+    render(<Chat session={session} />);
+    expect(await screen.findByText('Сохранённый вопрос')).toBeInTheDocument();
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    hidden.mockReturnValue(false);
+    now.mockReturnValue(1_000_000 + 11 * 60 * 1000);
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(screen.queryByText('Сохранённый вопрос')).not.toBeInTheDocument();
+    hidden.mockRestore();
+    now.mockRestore();
+  });
+
   it('после перезагрузки неподтверждённая отправка: повтор с прежним ID, без автоповтора и без текста в storage', async () => {
     const { savePending, loadPending } = await import('../src/session');
     savePending('d1', 'saved-id');

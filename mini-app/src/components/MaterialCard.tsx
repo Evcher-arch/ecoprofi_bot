@@ -1,7 +1,9 @@
 import { Card, Link, Paragraph, Text } from '@vkontakte/vkui';
 import type { MaterialCard as Material } from '../types';
 
-const HOSTS = new Set(['vk.com', 'vk.ru', 'vkvideo.ru', 'm.vk.com', 'm.vk.ru']);
+const BLOCK = { display: 'block', marginTop: 12 } as const;
+
+const HOSTS =new Set(['vk.com', 'vk.ru', 'vkvideo.ru', 'm.vk.com', 'm.vk.ru']);
 
 export function safeUrl(value: string): string | null {
   try {
@@ -45,9 +47,15 @@ export function MaterialCard({ card }: { card: Material }) {
     <Card mode="outline" style={{ padding: 14, marginTop: 10 }}>
       <Paragraph weight="1">{card.title}</Paragraph>
       {details(card).map((line) => <Text key={line} style={{ display: 'block', marginTop: 4 }}>{line}</Text>)}
-      {card.excerpt && <Paragraph style={{ marginTop: 8 }}>«{card.excerpt}»</Paragraph>}
-      <Paragraph style={{ marginTop: 8 }}>{card.explanation}</Paragraph>
-      {href && <Link href={href} target="_blank" rel="noopener noreferrer">Открыть источник</Link>}
+      {/* Цитата, пояснение и ссылка — отдельные абзацы: явный блок с отступом, а пробел/перевод
+          строки внутри разметки сохраняют разделение и при копировании текста. */}
+      {card.excerpt && <div style={BLOCK}><Paragraph>«{card.excerpt}»</Paragraph></div>}
+      {' '}
+      <div style={{ ...BLOCK, color: 'var(--vkui--color_text_secondary)' }}>
+        <Paragraph>{card.explanation}</Paragraph>
+      </div>
+      {' '}
+      {href && <div style={BLOCK}><Link href={href} target="_blank" rel="noopener noreferrer">Открыть источник</Link></div>}
     </Card>
   );
 }

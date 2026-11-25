@@ -11,6 +11,8 @@ interface ChatApi {
 }
 
 const noop = () => {};
+// Дольше этого вкладка была скрыта — прежняя выдача не показывается до проверки допуска.
+const HIDE_AFTER_MS = 10 * 60 * 1000;
 
 export function useChat(dialogId: string, token: string, client: ChatApi,
   onDialogProp?: (id: string) => void, onExpiredProp?: () => void) {
@@ -30,9 +32,9 @@ export function useChat(dialogId: string, token: string, client: ChatApi,
   // text = null: ID восстановлен после перезагрузки, исходный текст не хранился.
   const unconfirmed = useRef<{ id: string; text: string | null } | null>(null);
 
-  const load = useCallback(async (after = 0) => {
+  const load = useCallback(async (after = 0, silent = false) => {
     const current = ++generation.current;
-    setLoading(true);
+    if (!silent) setLoading(true);
     try {
       const page = await client.history(dialogId, token, after, 50);
       if (current !== generation.current || page.dialog_id !== dialogId) return;
@@ -136,9 +138,25 @@ export function useChat(dialogId: string, token: string, client: ChatApi,
     }
   }, [client, token, onDialog, onExpired]);
 
+  const hiddenAt = useRef<number | null>(null);
   useEffect(() => {
-    // Возврат скрытой вкладки: сначала актуализировать состояние, не показывать старую выдачу.
-    const visible = () => { if (!document.hidden) { setItems([]); void load(); } };
+    // Возврат скрытой вкладки: диалог остаётся на экране, допуск и история перепроверяются
+    // в фоне; отказ (401/403/503) скрывает выдачу в load. После долгого отсутствия прежняя
+    // выдача скрывается до ответа сервера.
+    const visible = () => {
+      if (document.hidden) {
+        hiddenAt.current = Date.now();
+        return;
+      }
+      const away = hiddenAt.current === null ? 0 : Date.now() - hiddenAt.current;
+      hiddenAt.current = null;
+      if (away > HIDE_AFTER_MS) {
+        setItems([]);
+        void load();
+      } else {
+        void load(0, true);
+      }
+    };
     document.addEventListener('visibilitychange', visible);
     return () => document.removeEventListener('visibilitychange', visible);
   }, [load]);

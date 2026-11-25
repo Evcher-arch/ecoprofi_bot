@@ -23,6 +23,8 @@ test('вход → уточнение → карточка → новый диа
   await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
   await page.getByRole('button', { name: 'Новый диалог' }).click();
   await expect(page.getByText('Контрольная запись')).toHaveCount(0, { timeout: 10000 });
+  await page.getByRole('button', { name: 'Как искать' }).click();
+  await expect(page.getByText(/Пишите 2–4 ключевых слова/)).toBeVisible();
   const width = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
   expect(width).toBe(true);
 });
