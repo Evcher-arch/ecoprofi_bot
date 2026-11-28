@@ -37,7 +37,7 @@ def test_upgrade_keeps_materials_versions_and_episodes(owner_conn, tmp_path):
         conn.execute("INSERT INTO index_job (owner_id, video_id, post_id, state) VALUES (-1, 391, 30861, 'done')")
 
         # Миграция 003 (функция 003) применяется следом и каталог не меняет.
-        assert migrate(conn, MIGRATIONS_DIR) == ["002_documents.sql", "003_autonomy.sql", "004_miniapp.sql"]
+        assert migrate(conn, MIGRATIONS_DIR) == ["002_documents.sql", "003_autonomy.sql", "004_miniapp.sql", "005_asr.sql"]
 
         row = conn.execute(
             "SELECT m.item_type, m.item_id, m.kind, m.doc_numbers, m.published_version_id, v.text_state "

@@ -107,7 +107,7 @@ def db(asr_owner):
     conn.close()
 
 
-def add_video(conn, item_id: int, *, initial: bool = False, state: str = "queued", version: str | None = "v1",
+def add_video(conn, item_id: int, *, initial: bool = False, state: str = "queued", version: str | None = None,
               owner_id: int = OWNER_ID) -> int:
     """Запись каталога с карточкой и заданием распознавания."""
     lecture = conn.execute("INSERT INTO lecture (schedule_row, title) VALUES (%s, %s) "

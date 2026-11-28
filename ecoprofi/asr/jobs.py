@@ -297,10 +297,12 @@ def prepared(conn, job: dict, *, path: str, size: int, sha256: str, duration_s: 
             # Запись изменилась у владельца: распознаётся новая версия, со сбросом счётчиков.
             _update(conn, current, "queued", source_version=version, attempts=0, failed_runs=0, reason=None,
                     audio_path=None, **NO_LEASE)
-            raise LeaseInvalid()
-        _update(conn, current, "leased", audio_path=path, audio_bytes=size, audio_sha256=sha256,
-                duration_s=duration_s, source_version=current["source_version"] or version,
-                deadline_at=_deadline(duration_s, now), lease_expires_at=now + LEASE_TTL)
+        else:
+            _update(conn, current, "leased", audio_path=path, audio_bytes=size, audio_sha256=sha256,
+                    duration_s=duration_s, source_version=current["source_version"] or version,
+                    deadline_at=_deadline(duration_s, now), lease_expires_at=now + LEASE_TTL)
+            return
+    raise LeaseInvalid()
 
 
 def audio_unavailable(conn, job: dict, reason: str) -> None:

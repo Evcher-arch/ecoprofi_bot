@@ -3,7 +3,7 @@
 #   docker compose -f compose.asr.yaml up -d --build
 #   docker compose -f compose.asr.yaml logs -f asr-worker
 # Ключ распознавателя выпускается на VPS (python -m ecoprofi.asr worker add owner-pc) и кладётся
-# в secrets/asr_worker_token. В окружение и журналы он не попадает.
+# в secrets/asr_worker_token/asr_worker_token.txt. В окружение и журналы он не попадает.
 name: ecoprofi-asr
 
 services:
@@ -37,7 +37,7 @@ services:
 
 secrets:
   asr_worker_token:
-    file: ./secrets/asr_worker_token
+    file: ./secrets/asr_worker_token/asr_worker_token.txt
 
 volumes:
   asr-models:

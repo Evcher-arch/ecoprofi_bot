@@ -105,7 +105,7 @@ def _date(iso: str | None) -> str:
 
 def _place(card: dict) -> str | None:
     """Строка о месте в источнике."""
-    kind = card["type"]
+    kind = card.get("type")
     if kind == "episode":
         place = f"Эпизод {interval(card['start_ms'], card['end_ms'])}"
         return place + (" · речь распознана автоматически" if card.get("recognized") else "")
