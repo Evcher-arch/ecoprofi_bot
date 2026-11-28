@@ -27,6 +27,11 @@ indexer = [
     "Pillow>=10,<13",
     "striprtf>=0.0.26,<1",
 ]
+# Распознаватель на ПК (006): только образ Dockerfile.asr.
+asr-worker = [
+    "faster-whisper>=1.0,<2",
+    "httpx>=0.27,<1",
+]
 
 [tool.setuptools.packages.find]
 include = ["ecoprofi*"]

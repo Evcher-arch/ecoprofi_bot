@@ -32,4 +32,5 @@ node_modules/
 playwright-report/
 test-results/
 deploy/secrets/
+secrets/
 deploy/certs/

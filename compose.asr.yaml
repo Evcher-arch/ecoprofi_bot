@@ -1,0 +1,44 @@
+# Распознаватель на ПК владельца (specs/006-video-asr-transcriber).
+# Отдельный проект ecoprofi-asr: его нельзя спутать с остановленным стендом ПК из 005.
+#   docker compose -f compose.asr.yaml up -d --build
+#   docker compose -f compose.asr.yaml logs -f asr-worker
+# Ключ распознавателя выпускается на VPS (python -m ecoprofi.asr worker add owner-pc) и кладётся
+# в secrets/asr_worker_token. В окружение и журналы он не попадает.
+name: ecoprofi-asr
+
+services:
+  asr-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.asr
+    image: ecoprofi-asr-worker:local
+    restart: unless-stopped
+    environment:
+      ASR_SERVER: ${ASR_SERVER:-https://miniapp.bot-alimony.ru/asr/v1/}
+      ASR_TOKEN_FILE: /run/secrets/asr_worker_token
+      ASR_TMP: /tmp/asr
+      ASR_MODELS: /models
+      ASR_MODEL: ${ASR_MODEL:-large-v3}
+      # При нехватке видеопамяти: int8_float16 (~3 ГБ вместо ~4,5 ГБ).
+      ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-float16}
+    secrets: [asr_worker_token]
+    volumes:
+      - asr-models:/models
+      - asr-tmp:/tmp/asr
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # Windows уходит в сон или Docker Desktop останавливают: SIGTERM, задание возвращается release.
+    stop_grace_period: 30s
+
+secrets:
+  asr_worker_token:
+    file: ./secrets/asr_worker_token
+
+volumes:
+  asr-models:
+  asr-tmp:

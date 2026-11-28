@@ -1,0 +1,30 @@
+# Распознаватель на ПК владельца (specs/006-video-asr-transcriber, research R3).
+# Сборка и запуск: docker compose -f compose.asr.yaml up -d --build
+# CUDA 12 + cuDNN 9 — требование CTranslate2 >= 4.5 (faster-whisper 1.x).
+# Серверные модули ecoprofi в образ не копируются: только константы протокола и подпакет worker.
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    PIP_DEFAULT_TIMEOUT=100 \
+    PIP_MAX_RETRIES=10 \
+    HF_HOME=/models/hf
+
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Только зависимости распознавателя (группа asr-worker в pyproject.toml): без FastAPI, psycopg, pgvector.
+RUN pip3 install --no-cache-dir "faster-whisper>=1.0,<2" "httpx>=0.27,<1"
+
+RUN groupadd -g 10001 asr && useradd -u 10001 -g asr -m -s /bin/bash asr \
+    && mkdir -p /tmp/asr /models /run/secrets && chown asr:asr /tmp/asr /models && chmod 700 /tmp/asr
+
+WORKDIR /app
+COPY ecoprofi/__init__.py ./ecoprofi/__init__.py
+COPY ecoprofi/asr/__init__.py ./ecoprofi/asr/__init__.py
+COPY ecoprofi/asr/worker ./ecoprofi/asr/worker
+
+USER asr
+CMD ["python3", "-m", "ecoprofi.asr.worker"]

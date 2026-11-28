@@ -55,6 +55,8 @@ class VideoSource:
     access_key: str | None
     track_url: str | None
     paid_feed: bool | None = None      # None — лента публикации не проверялась
+    duration: int | None = None        # длительность из video.get, секунды (версия источника для 006)
+    date: int | None = None            # дата загрузки из video.get, unixtime
 
     @property
     def url(self) -> str:
@@ -265,7 +267,7 @@ class VkSources:
                 title=(video.get("title") or "").strip() or f"Видео {video['owner_id']}_{video['id']}",
                 description=(video.get("description") or "").strip(),
                 link_type="attachment", access_key=video.get("access_key"),
-                track_url=_track_url(video),
+                track_url=_track_url(video), duration=_int(video.get("duration")), date=_int(video.get("date")),
             ))
         if not videos:
             raise SourceEmpty(f"В посте {post_id} нет прямых видеовложений.")
@@ -344,6 +346,7 @@ class VkSources:
                     title=(obj.get("title") or "").strip() or f"Видео {obj['owner_id']}_{obj['id']}",
                     description=(obj.get("description") or "").strip(), link_type="attachment",
                     access_key=obj.get("access_key"), track_url=_track_url(obj), paid_feed=result.paid_feed,
+                    duration=_int(obj.get("duration")), date=_int(obj.get("date")),
                 ))
             else:
                 url = obj.get("url")
@@ -379,6 +382,24 @@ class VkSources:
                 return _track_url(record)
         raise SourceEmpty(f"video.get не вернул запись {ref}.")
 
+    def media_streams(self, owner_id: int, video_id: int, access_key: str | None = None) -> dict:
+        """Свежие адреса медиа записи (006, research R1): {"files", "duration", "date"}.
+
+        Адреса подписаны и временны: возвращаются только в памяти, не пишутся в
+        журналы и каталог. Нет записи в ответе — SourceEmpty, удаление — SourceDeleted.
+        """
+        ref = f"{owner_id}_{video_id}" + (f"_{access_key}" if access_key else "")
+        response = self._call("video.get", videos=ref)
+        for record in (response.get("items", []) if isinstance(response, dict) else []):
+            if (record.get("owner_id"), record.get("id")) != (owner_id, video_id):
+                continue
+            if record.get("deleted") or record.get("is_deleted"):
+                raise SourceDeleted(f"Запись {owner_id}_{video_id} удалена.")
+            files = record.get("files") if isinstance(record.get("files"), dict) else {}
+            files = {k: v for k, v in files.items() if isinstance(v, str) and v.startswith("https://")}
+            return {"files": files, "duration": _int(record.get("duration")), "date": _int(record.get("date"))}
+        raise SourceEmpty(f"video.get не вернул запись {owner_id}_{video_id}.")
+
     def read_track(self, url: str) -> bytes:
         raw = self._transport.get(url)
         if len(raw) > MAX_TRACK_BYTES:
@@ -386,6 +407,13 @@ class VkSources:
         if not raw.lstrip(b"\xef\xbb\xbf").lstrip().startswith(b"WEBVTT"):
             raise SourceParse("Дорожка не является WebVTT.")
         return raw
+
+
+def _int(value) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _track_url(record: dict) -> str | None:

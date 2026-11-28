@@ -41,3 +41,6 @@ tools/miniapp-probe/test-results/
 # Сертификат и ключ публичного входа Mini App (Cloudflare Origin CA)
 deploy/certs/
 deploy/secrets/
+
+# Ключ распознавателя на ПК (006, compose.asr.yaml)
+secrets/

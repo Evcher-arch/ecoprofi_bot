@@ -26,7 +26,7 @@ FROM python:3.12-slim AS indexer-base
 ENV PYTHONDONTWRITEBYTECODE=1     PYTHONUNBUFFERED=1     PYTHONPATH=/app     PIP_INDEX_URL=https://pypi.org/simple/     PIP_DEFAULT_TIMEOUT=100     PIP_MAX_RETRIES=10     PIP_RETRY_ON_TIMEOUT=True
 
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-rus fonts-dejavu-core     && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-rus fonts-dejavu-core ffmpeg     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -g 10001 ecoprofi && useradd -u 10001 -g ecoprofi -m -s /bin/bash ecoprofi
 
@@ -41,6 +41,8 @@ COPY migrations ./migrations
 COPY tests ./tests
 # Точка подключения тома со значениями доступа оператора: только владелец.
 RUN mkdir /secrets && chown ecoprofi:ecoprofi /secrets && chmod 700 /secrets
+# Временный звук распознавания (006): том asr-tmp подключается только к asr-gateway.
+RUN mkdir /tmp/asr && chown ecoprofi:ecoprofi /tmp/asr && chmod 700 /tmp/asr
 USER ecoprofi
 CMD ["python", "-c", "print('\u0423\u043a\u0430\u0436\u0438\u0442\u0435 \u043a\u043e\u043c\u0430\u043d\u0434\u0443 \u0441\u0435\u0440\u0432\u0438\u0441\u0430 \u0432 compose.yaml')"]
 

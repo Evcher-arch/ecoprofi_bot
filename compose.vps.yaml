@@ -10,5 +10,7 @@ services:
       - "443:443"
     volumes:
       - ./deploy/vps/miniapp-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # 006: API распознавателя /asr/v1/ (подключается в server-блок 443).
+      - ./deploy/asr-location.inc:/etc/nginx/conf.d/asr-location.inc:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
       - /var/www/certbot:/var/www/certbot:ro

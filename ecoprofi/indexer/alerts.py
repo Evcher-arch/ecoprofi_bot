@@ -113,3 +113,17 @@ def text_run_summary(run_id: int, outcomes: dict) -> str:
             f"ждёт редактора: {outcomes.get('editor', 0)}; формат не поддерживается: "
             f"{outcomes.get('unsupported', 0)}; постоянный сбой: {outcomes.get('permanent', 0)}; "
             f"отложено: {outcomes.get('deferred', 0)}.")
+
+
+# --- распознавание записей без субтитров (006) ---
+
+def text_asr_permanent(key: str, reason: str | None) -> str:
+    return (f"Запись не распознаётся ({_now()}).\n{key}: постоянный сбой распознавания"
+            f"{f' ({reason})' if reason else ''}, автоматически больше не берётся.\n"
+            f"Действие: python -m ecoprofi.asr jobs --state permanent; requeue {key}")
+
+
+def text_asr_silent(days: int) -> str:
+    return (f"Распознаватель на ПК не выходил на связь {days} сут. ({_now()}).\n"
+            "Записи без субтитров ждут распознавания; поиск по остальным материалам работает.\n"
+            "Действие: включить ПК с Docker Desktop; python -m ecoprofi.asr status")

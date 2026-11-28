@@ -30,7 +30,7 @@ function details(card: Material): string[] {
     rows.push(`Эпизод ${clock(card.start_ms)}–${clock(card.end_ms)}`);
   }
   if (card.page != null) rows.push(`Страница ${card.page}${card.pages_total ? ` из ${card.pages_total}` : ''}`);
-  if (card.recognized) rows.push('Текст распознан');
+  if (card.recognized) rows.push(card.type === 'episode' ? 'Речь распознана автоматически' : 'Текст распознан');
   if (card.requisites) {
     rows.push(`Письмо № ${card.requisites.number}`);
     if (card.requisites.date) rows.push(`Дата: ${card.requisites.date}`);

@@ -50,6 +50,10 @@ def parse_args():
     p.add_argument("--project-dir", default=os.environ.get("PROJECT_DIR", None))
     p.add_argument("--domain", default=os.environ.get("VPS_DOMAIN", "miniapp.bot-alimony.ru"))
     p.add_argument("--email", default=os.environ.get("VPS_EMAIL", "admin@bot-alimony.ru"))
+    # 006: после первой миграции 005_asr.sql сразу поставить распознавание на паузу,
+    # чтобы первичный проход не начался до пробы (quickstart §2).
+    p.add_argument("--asr-pause", action="store_true", default=os.environ.get("ASR_PAUSE") == "1",
+                   help="поставить распознавание на паузу после миграций")
     return p.parse_args()
 
 
@@ -169,13 +173,20 @@ def deploy(args):
         print("  Uploading project files...", file=sys.stderr)
         for item in project_dir.iterdir():
             if item.is_dir():
-                if item.name in ("deploy", "__pycache__", ".git", ".gigacode", ".idea", ".claude", ".specify"):
+                if item.name in ("deploy", "__pycache__", ".git", ".gigacode", ".idea", ".claude", ".specify",
+                                 "secrets"):
                     continue
                 upload_dir(sftp, client, item, remote_root, project_dir)
             elif item.name in (".env", "images.tar", "images.tar.gz", ".env.remote"):
                 continue  # пропускаем
             else:
                 sftp.put(str(item), remote_root + "/" + item.name)
+
+        # Файлы шлюза из deploy/, которые монтирует compose.vps.yaml (каталог deploy/ целиком не загружается).
+        for rel in ("deploy/vps/miniapp-nginx.conf", "deploy/asr-location.inc"):
+            run_ssh(client, f"mkdir -p {remote_root}/{Path(rel).parent.as_posix()}")
+            sftp.put(str(project_dir / rel), f"{remote_root}/{rel}")
+            print(f"    {rel}", file=sys.stderr)
 
         # Загружаем images.tar
         print(f"  Uploading images.tar ({os.path.getsize(tar_path) / 1024 / 1024:.1f} MB)...", file=sys.stderr)
@@ -283,6 +294,16 @@ CREATE EXTENSION IF NOT EXISTS vector;
             if line.strip():
                 print(f"  {line[:120]}", file=sys.stderr)
 
+        # 9a. Распознавание (006): пауза до пробы, если запрошена.
+        if args.asr_pause:
+            out, err = run_ssh(
+                client,
+                f"cd {remote_root} && docker compose -f compose.yaml -f compose.vps.yaml --profile indexer "
+                f"run --rm indexer python -m ecoprofi.asr pause 2>&1",
+                timeout=120,
+            )
+            print(f"  ASR: {(out + err).strip()[-200:]}", file=sys.stderr)
+
         # 10. Перезапускаем все сервисы
         print("\n=== Restart services ===", file=sys.stderr)
         run_ssh(
@@ -291,6 +312,13 @@ CREATE EXTENSION IF NOT EXISTS vector;
             timeout=60,
         )
         time.sleep(8)
+
+        # 10a. Проверка конфигурации шлюза (asr-location.inc подключён в server 443).
+        out, err = run_ssh(client, f"cd {remote_root} && docker compose -f compose.yaml -f compose.vps.yaml "
+                                   f"exec -T miniapp-gateway nginx -t 2>&1")
+        print(f"  nginx -t: {(out + err).strip()[-300:]}", file=sys.stderr)
+        if "successful" not in (out + err):
+            print("  ОШИБКА: конфигурация шлюза не прошла nginx -t; проверьте deploy/asr-location.inc", file=sys.stderr)
 
         # 11. Certbot
         print(f"\n=== SSL: {args.domain} ===", file=sys.stderr)
@@ -316,7 +344,7 @@ CREATE EXTENSION IF NOT EXISTS vector;
         print(f"  {out.strip()}", file=sys.stderr)
 
         # Логи сервисов
-        for svc in ["bot", "indexer-daemon", "vk-adapter"]:
+        for svc in ["bot", "indexer-daemon", "vk-adapter", "asr-gateway"]:
             print(f"\n=== {svc} logs (last 5) ===", file=sys.stderr)
             out, _ = run_ssh(client, f"cd {remote_root} && docker logs --tail 5 {svc} 2>&1")
             for line in out.strip().split("\n")[-5:]:

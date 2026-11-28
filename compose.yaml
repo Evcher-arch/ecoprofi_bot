@@ -155,6 +155,25 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Распознавание записей без субтитров (006): очередь, звук, публикация; API /asr/v1/ для ПК.
+  # Порт наружу не публикуется: доступ только через шлюз (deploy/asr-location.inc).
+  # Доступ оператора — тот же том, что у indexer-daemon (продление под pg_advisory_lock).
+  asr-gateway:
+    <<: *indexer
+    profiles: [daemon]
+    command: ["uvicorn", "ecoprofi.asr.gateway:app", "--host", "0.0.0.0", "--port", "8100", "--no-access-log"]
+    environment:
+      <<: *indexer-env
+      ASR_TMP: /tmp/asr
+    volumes:
+      - indexer-secrets:/secrets
+      - asr-tmp:/tmp/asr
+    mem_limit: 300m
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
   # Интеграционные проверки: docker compose --profile test run --rm tests
   # Отдельная БД в памяти, рабочий том не затрагивается.
   test-db:
@@ -197,6 +216,8 @@ volumes:
   db-data:
   # Значения доступа оператора VK: том подключён только к сервисам индексатора.
   indexer-secrets:
+  # Временный звук распознавания (006): одна запись на распознаватель, лимит 2 ГБ в asr/audio.py.
+  asr-tmp:
 
 networks:
   internal:

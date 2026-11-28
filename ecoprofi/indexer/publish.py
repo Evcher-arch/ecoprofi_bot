@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 from ecoprofi import telemetry
 from ecoprofi.ai import AILimit
+from ecoprofi.asr import jobs as asr_jobs
 from ecoprofi.indexer import documents
 from ecoprofi.indexer.retry import (
     SourceAuth, SourceDeleted, SourceEmpty, SourceError, SourceParse, SourceRateLimit, with_retry,
@@ -90,7 +91,7 @@ def _published(conn, source) -> dict | None:
     return conn.execute(
         """
         SELECT m.id AS material_id, m.state, v.id AS version_id, v.content_hash, v.processor_version,
-               v.embedding_model, v.text_state
+               v.embedding_model, v.text_state, v.speech_source
         FROM material m JOIN material_version v ON v.id = m.published_version_id
         WHERE m.item_type = %s AND m.owner_id = %s AND m.item_id = %s
         """,
@@ -166,6 +167,10 @@ def publish_version(conn, ai, source: VideoSource, schedule, track: bytes | None
     unchanged = bool(current and current["state"] == "active" and current["content_hash"] == digest
                      and current["processor_version"] == PROCESSOR_VERSION
                      and current["embedding_model"] == ai.doc_model)
+    if current and current["speech_source"] == "asr" and track is None:
+        # Распознанная версия не заменяется карточкой (006, R7): запись по-прежнему ждёт
+        # субтитров, а задание распознавания получает актуальную версию источника.
+        return _keep_recognized(conn, source, schedule, current)
     if current and current["text_state"] == "ready" and track is None:
         # Исчезнувшая дорожка не заменяет проверенные эпизоды карточкой.
         raise SourceEmpty("Дорожка не возвращена; прежняя версия сохранена.")
@@ -205,9 +210,10 @@ def publish_version(conn, ai, source: VideoSource, schedule, track: bytes | None
                 raise SourceParse("Версия изменилась во время обработки; повторите проход.")
             version_id = conn.execute(
                 "INSERT INTO material_version (material_id, content_hash, processor_version, "
-                "embedding_model, card_state, text_state) VALUES (%s, %s, %s, %s, 'ready', %s) RETURNING id",
+                "embedding_model, card_state, text_state, speech_source) "
+                "VALUES (%s, %s, %s, %s, 'ready', %s, %s) RETURNING id",
                 (material["id"], digest, PROCESSOR_VERSION, ai.doc_model,
-                 "ready" if track is not None else "absent"),
+                 "ready" if track is not None else "absent", "subtitles" if track is not None else None),
             ).fetchone()["id"]
             for episode, vector in zip(episodes, vectors):
                 conn.execute(
@@ -219,9 +225,28 @@ def publish_version(conn, ai, source: VideoSource, schedule, track: bytes | None
         # Переключение, снятие прежних версий и завершение задания — одна транзакция.
         _switch(conn, material["id"], version_id)
         _set_job(conn, source, "done")
+        # Распознавание (006): без дорожки запись встаёт в очередь, субтитры снимают задание.
+        if track is None:
+            asr_jobs.enqueue(conn, material["id"], source.owner_id, source.video_id,
+                             asr_jobs.source_version(source.owner_id, source.video_id, source.duration, source.date))
+        else:
+            asr_jobs.cancel(conn, source.owner_id, source.video_id, "subtitles")
         count = conn.execute("SELECT count(*) AS n FROM fragment WHERE version_id = %s", (version_id,)).fetchone()["n"]
     return {"material_id": material["id"], "version_id": version_id, "created": created,
             "episodes": count, "track": track is not None}
+
+
+def _keep_recognized(conn, source: VideoSource, schedule, current: dict) -> dict:
+    with conn.transaction():
+        _lock(conn, source)
+        _link(conn, _lecture_id(conn, schedule), current["material_id"], source)
+        asr_jobs.enqueue(conn, current["material_id"], source.owner_id, source.video_id,
+                         asr_jobs.source_version(source.owner_id, source.video_id, source.duration, source.date))
+        _set_job(conn, source, "done")
+        count = conn.execute("SELECT count(*) AS n FROM fragment WHERE version_id = %s",
+                             (current["version_id"],)).fetchone()["n"]
+    return {"material_id": current["material_id"], "version_id": current["version_id"], "created": False,
+            "episodes": count, "track": False}
 
 
 def publish_document(conn, ai, community_id: int, source: DocSource, lecture_id: int, raw: bytes,
@@ -329,6 +354,8 @@ def unpublish_deleted(conn, source) -> None:
         conn.execute("UPDATE material SET state = 'deleted' WHERE item_type = %s AND owner_id = %s AND item_id = %s",
                      _item(source))
         _set_job(conn, source, "done", reason="deleted")
+        if isinstance(source, VideoSource):
+            asr_jobs.cancel(conn, source.owner_id, source.video_id, "deleted")
 
 
 def unpublish_post(conn, post_id: int) -> int:

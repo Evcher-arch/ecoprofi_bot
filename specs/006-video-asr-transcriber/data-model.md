@@ -43,16 +43,19 @@
 | `id` | `boolean PK` | `true` | `CHECK (id)` |
 | `weekdays` | `smallint[] NOT NULL` | `{7}` | ISO-дни 1–7, непустой массив. 7 — воскресенье |
 | `start_at` | `time NOT NULL` | `01:00` | Время МСК |
-| `window` | `interval NOT NULL` | `8 hours` | От 30 минут до 24 часов |
+| `window_length` | `interval NOT NULL` | `8 hours` | От 30 минут до 24 часов. Имя `window` — зарезервированное слово SQL |
 | `catch_up` | `boolean NOT NULL` | `false` | Догон пропущенного запуска при следующем выходе ПК на связь в течение того же окна + 24 ч |
 | `paused` | `boolean NOT NULL` | `false` | Пауза автоматических запусков, включая первичный проход |
 | `initial_pass` | `text NOT NULL` | `'pending'` | `pending` → `running` → `done` |
 | `initial_started_at`, `initial_done_at` | `timestamptz NULL` | | |
 | `manual_requested_at` | `timestamptz NULL` | | Внеочередной запуск, сбрасывается при начале запуска |
+| `manual_only` | `text[] NULL` | | Внеочередной запуск по списку записей `<owner>_<item>` (`run-now --only`). Переносится в `asr_run.only_refs` и сбрасывается при начале запуска |
 | `last_due_at` | `timestamptz NULL` | | Последнее начатое плановое окно; защищает от двойного запуска в одном окне |
 | `silence_alert_days` | `integer NOT NULL` | `14` | Порог оповещения `asr_silent` |
 
-**Окно открыто, если** не выставлена пауза `paused` и выполняется любое из условий:
+**Окно открыто, если** запрошен внеочередной запуск по списку (`manual_only` не пуст) — независимо от паузы, это явное действие оператора для пробы. Запуск по списку выдаёт только записи из списка и не открывает первичный проход.
+
+Иначе окно открыто, если не выставлена пауза `paused` и выполняется любое из условий:
 
 - `initial_pass ≠ 'done'`;
 - запрошен внеочередной запуск (`manual_requested_at`);
@@ -65,7 +68,7 @@
 | --- | --- | --- |
 | `owner_id`, `item_id` | `bigint`, PK вместе | Ключ записи: `material.item_type = 'video'` |
 | `material_id` | `bigint NOT NULL FK material` | |
-| `source_version` | `text NOT NULL` | Хеш `owner_id`, `item_id`, `duration`, `date` из `video.get` |
+| `source_version` | `text NULL` | Хеш `owner_id`, `item_id`, `duration`, `date` из `video.get`. `NULL` — версия ещё не определена (задания из миграции: SQL не обращается к VK, а `duration` и `date` в каталоге не хранятся). Заполняется индексатором при ближайшем проходе или при подготовке звука из свежего `video.get`. Результат принимается только при непустом значении |
 | `state` | `text NOT NULL` | См. переходы |
 | `reason` | `text NULL` | `denied`, `no_file`, `deleted`, `timeout`, `decode`, `gpu_unavailable`, `server`, `subtitles`, `no_speech` |
 | `initial` | `boolean NOT NULL DEFAULT false` | Входит в начальную очередь первичного прохода |
@@ -78,9 +81,11 @@
 | `run_id` | `bigint NULL FK asr_run` | |
 | `audio_path` | `text NULL` | Путь временного файла на томе `asr-tmp`. Удаляется вместе с файлом |
 | `audio_bytes`, `duration_s` | `bigint NULL`, `integer NULL` | |
+| `audio_sha256` | `text NULL` | Контрольная сумма подготовленного звука: заголовок `X-Audio-Sha256` и проверка `result` |
+| `deadline_at` | `timestamptz NULL` | Предел на запись: время подготовки звука + 1,5 × длительность + 15 мин. Превышение — `retry` / `timeout` |
 | `updated_at` | `timestamptz NOT NULL` | |
 
-**Уникальность:** одно задание на запись. Смена `source_version` возвращает задание в `queued` и сбрасывает счётчики.
+**Уникальность:** одно задание на запись. Смена непустой `source_version` возвращает задание в `queued` и сбрасывает счётчики. Заполнение `NULL` состояние не меняет.
 
 **Переходы состояния**
 
@@ -93,17 +98,23 @@ queued ──lease──▶ preparing ──звук готов──▶ leased 
    │                                          ├─ released / аренда истекла ─▶ queued (attempts не растёт)
    └──────────── requeue оператора ◀──────────┴─ failed_runs ≥ 3 ─▶ permanent
 любое незавершённое ── субтитры появились ──▶ cancelled (reason = subtitles)
+любое ── индексатор подтвердил удаление ──▶ cancelled (reason = deleted)
 published / no_speech ── смена source_version или reprocess ──▶ queued
 ```
 
-- **Итоговые исходы FR-14:**
+- **Исходы FR-14.** Каждое состояние относится ровно к одному исходу:
   - `published` — распознана;
-  - `queued`, `preparing`, `leased`, `transcribed`, `retry` — ждёт распознавания;
+  - `queued`, `preparing`, `leased`, `transcribed` — ждёт распознавания;
+  - `retry` — временный сбой;
   - `audio_unavailable` — звук недоступен;
   - `no_speech` — речь не найдена;
-  - `retry` — временный сбой;
-  - `permanent` — постоянный сбой.
+  - `permanent` — постоянный сбой;
+  - `cancelled` / `subtitles` — заменена субтитрами;
+  - `cancelled` / `deleted` — снята после подтверждённого удаления.
+- **Итоговые для первичного прохода** (FR-19, SC-03): `published`, `audio_unavailable`, `no_speech`, `permanent`, `cancelled`.
 - **Задание с `audio_unavailable`** перепроверяется не чаще раза в неделю, в начале запуска.
+- **Причина `deleted` у `audio_unavailable`** означает отказ VK при получении звука, а не подтверждённое удаление. `asr-gateway` не снимает запись из поиска. Удаление подтверждает индексатор по правилам 003, и тогда задание получает `cancelled` / `deleted`.
+- **Длинная запись.** Отдельного состояния нет. Запись любой длины обрабатывается целиком в пределах `1,5 × длительность + 15 мин`. Превышение предела — временный сбой `timeout`, после трёх запусков подряд — `permanent`.
 
 ### `asr_transcript` — расшифровка
 
@@ -127,6 +138,7 @@ published / no_speech ── смена source_version или reprocess ──�
 | `id` | `bigserial PK` | |
 | `worker_id` | `bigint FK asr_worker` | |
 | `kind` | `text NOT NULL` | `initial`, `scheduled`, `catch_up`, `manual` |
+| `only_refs` | `text[] NULL` | Записи внеочередного запуска по списку. `NULL` — вся очередь. Имя `only` — зарезервированное слово SQL |
 | `started_at` | `timestamptz NOT NULL` | |
 | `until` | `timestamptz NULL` | Конец окна. `NULL` у первичного прохода |
 | `finished_at` | `timestamptz NULL` | |
@@ -138,9 +150,10 @@ published / no_speech ── смена source_version или reprocess ──�
 
 ## Связи с индексатором (R7)
 
-- **Запись без пригодной дорожки.** `indexer-daemon` при каждом проходе делает upsert в `asr_job`: создаёт задание или возвращает его в `queued`, если изменилась `source_version`. Действующую распознанную версию той же `source_version` он не заменяет карточкой.
+- **Запись без пригодной дорожки.** `indexer-daemon` при каждом проходе делает upsert в `asr_job`: создаёт задание, заполняет `source_version` у задания из миграции или возвращает задание в `queued`, если изменилась непустая `source_version`. Для этого `VideoSource` получает поля `duration` и `date` из `video.get`. Опубликованную распознанную версию он не заменяет карточкой, в том числе при изменившейся `source_version`: распознанная версия остаётся в поиске до публикации новой.
+- **Подтверждённое удаление.** `unpublish_deleted` ставит заданию `cancelled` / `deleted`.
 - **Появились субтитры.** Индексатор публикует версию `speech_source = 'subtitles'` и ставит заданию `cancelled` / `subtitles`, сбрасывая `lease_id`.
-- **Миграция.** Создаёт `asr_job` с `initial = true` для всех `index_job` с `item_type = 'video' AND waiting_source`.
+- **Миграция.** Создаёт `asr_job` с `initial = true` и `source_version = NULL` для всех `index_job` с `item_type = 'video' AND waiting_source`.
 
 ## Оповещения (таблица `alert` из 003)
 

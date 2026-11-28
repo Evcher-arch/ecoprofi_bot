@@ -74,6 +74,9 @@ def build_cards(candidates, explained: dict[int, str]) -> list[dict]:
         if c.kind == "episode":
             card.update(excerpt=c.text, start_ms=c.start_ms, end_ms=c.end_ms,
                         url=episode_url(c.url, c.start_ms))
+            if c.recognized:
+                # Эпизод из автоматического распознавания речи (006, FR-06).
+                card["recognized"] = True
         elif c.kind == "page":
             card.update(excerpt=c.text, page=c.page_no, pages_total=c.pages_total, recognized=c.recognized)
         elif c.kind == "letter":
@@ -104,7 +107,8 @@ def _place(card: dict) -> str | None:
     """Строка о месте в источнике."""
     kind = card["type"]
     if kind == "episode":
-        return f"Эпизод {interval(card['start_ms'], card['end_ms'])}"
+        place = f"Эпизод {interval(card['start_ms'], card['end_ms'])}"
+        return place + (" · речь распознана автоматически" if card.get("recognized") else "")
     page = None
     if card.get("page"):
         page = f"стр. {card['page']}" + (f" из {card['pages_total']}" if card.get("pages_total") else "")
